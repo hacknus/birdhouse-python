@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Live Spectrogram</title>
+<style>
+body { background: black; margin: 0; }
+canvas { display: block; }
+</style>
+</head>
+<body>
+
+<canvas id="spec"></canvas>
+
+<script>
+const canvas = document.getElementById("spec");
+const ctx = canvas.getContext("2d");
+
+const HEIGHT = 256;
+const SECONDS = 15;
+const FPS = 30;
+const WIDTH = SECONDS * FPS;
+
+canvas.width = WIDTH;
+canvas.height = HEIGHT;
+
+const SAMPLE_RATE = 44100;
+const FFT_SIZE = 1024;
+
+const FREQ_MIN = 200;
+const FREQ_MAX = 12000;
+
+// Precompute log-frequency mapping (important for performance)
+const logFreqMap = new Array(HEIGHT);
+
+for (let y = 0; y < HEIGHT; y++) {
+    const frac = y / HEIGHT;
+    const freq = FREQ_MIN * Math.pow(FREQ_MAX / FREQ_MIN, frac);
+    const bin = Math.round(freq * FFT_SIZE / SAMPLE_RATE);
+    logFreqMap[HEIGHT - 1 - y] = Math.min(bin, FFT_SIZE / 2 - 1);
+}
+
+// WebSocket
+const ws = new WebSocket(`ws://${location.host}/ws`);
+
+ws.onmessage = (event) => {
+    const fft = JSON.parse(event.data);
+
+    // Scroll left by 1 pixel
+    ctx.drawImage(canvas, -1, 0);
+
+    // Draw new column
+    for (let y = 0; y < HEIGHT; y++) {
+        const v = fft[logFreqMap[y]];
+
+        // dB scaling (tweak if needed)
+        const norm = (v + 6) / 6;   // roughly -6 dB → 0 dB
+        const c = Math.max(0, Math.min(255, norm * 255));
+
+        ctx.fillStyle = `rgb(${c}, ${c * 0.6}, 255)`;
+        ctx.fillRect(WIDTH - 1, y, 1, 1);
+    }
+};
+</script>
+</body>
+</html>
