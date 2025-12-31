@@ -1,7 +1,7 @@
 import base64
 from dotenv import dotenv_values
 
-env_values = dotenv_values("mainapp/bird.env")
+env_values = dotenv_values(".env")
 
 custom_key = env_values['ENCODING']
 

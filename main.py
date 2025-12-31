@@ -34,7 +34,7 @@ import influxdb_client
 from influxdb_client.client.write_api import SYNCHRONOUS
 
 class VoegeliMonitor:
-    def __init__(self, env_file: Path = Path('./bird.env')):
+    def __init__(self, env_file: Path = Path('./.env')):
 
         env_values = dotenv_values(env_file)
         self.mediamtx_url = env_values['IMAGE_GRAB_URL']
