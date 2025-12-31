@@ -1,0 +1,12 @@
+urllib3~=2.6.2
+requests~=2.32.5
+sounddevice
+PyAudio
+fastapi
+uvicorn
+numpy
+gpiozero
+adafruit-circuitpython-sht4x
+opencv-python
+influxdb-client
+python-dotenv
