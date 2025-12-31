@@ -1,7 +1,7 @@
 import time
 import RPi.GPIO as GPIO
 
-from .ignore_motion import ignore_motion_for
+from ignore_motion import ignore_motion_for
 
 # Toggle IR LED (ON or OFF)
 
