@@ -1,3 +1,4 @@
+import queue
 import subprocess
 from pathlib import Path
 import logging
@@ -24,6 +25,8 @@ from dotenv import dotenv_values
 
 import urllib3
 
+from tcp_server import run_server
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from urllib3.exceptions import HTTPError
@@ -33,8 +36,11 @@ import influxdb_client.rest
 import influxdb_client
 from influxdb_client.client.write_api import SYNCHRONOUS
 
+
 class VoegeliMonitor:
     def __init__(self, env_file: Path = Path('./.env')):
+
+        self.task_is_running = True
 
         env_values = dotenv_values(env_file)
         self.mediamtx_url = env_values['IMAGE_GRAB_URL']
@@ -82,6 +88,17 @@ class VoegeliMonitor:
         # Start data logger thread
         data_thread = threading.Thread(target=self.periodic_data_logger, daemon=True)
         data_thread.start()
+
+        self.tcp_cmd_queue = queue.Queue()
+        self.tcp_cmd_ack_queue = queue.Queue()
+        self.tcp_rep_queue = queue.Queue()
+
+        self.tcp_server = run_server(self.tcp_cmd_queue, self.tcp_cmd_ack_queue, self.tcp_rep_queue,
+                                     env_file,
+                                     self.task_is_running,
+                                     False,
+                                     port=65432,
+                                     ip="0.0.0.0")
 
     # Function to read temperature and humidity
     def read_temperature_humidity(self, sensor):
@@ -146,12 +163,11 @@ class VoegeliMonitor:
                 points.append(p)
         self.write_api.write(bucket=self.bucket, org=self.org, record=points)
 
-
     # Function to store sensor data in the database
     def store_sensor_data(self, inside_temperature, inside_humidity, outside_temperature, outside_humidity, inside_co2,
                           motion_triggered):
         device_data = {
-            'device': 'COCoNuT-ELU',
+            'device': 'voegeli',
             'data': {
                 # system monitoring of Raspberry Pi
 
@@ -179,6 +195,8 @@ class VoegeliMonitor:
                 'inside_humidity_unit': '%',
                 # 'inside_co2': inside_co2,
                 # 'inside_co2_unit': 'ppm',
+                # 'luminosity': luminosity,
+                # 'luminosity_unit': 'lux',
                 'motion': motion_triggered,
             }
         }
@@ -315,6 +333,88 @@ class VoegeliMonitor:
 
 
 if __name__ == "__main__":
+
+    logging.basicConfig(filename=f"log/log_{time.time()}.log",
+                        filemode='a',
+                        format='%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s',
+                        datefmt='%H:%M:%S',
+                        level=logging.DEBUG)
+
     voegeli_monitor = VoegeliMonitor()
+
     while True:
-        time.sleep(1)
+        try:
+            cmd = voegeli_monitor.tcp_cmd_queue.get(block=False)
+            logging.debug(f"[TCP] revived: {cmd.encode()}")
+            cmd_string = cmd.encode()
+            if "[CMD] IR ON" in cmd_string:
+                turn_ir_on()
+                voegeli_monitor.tcp_cmd_ack_queue.put("[ACK] IR ON executed")
+            elif "[CMD] IR OFF" in cmd_string:
+                turn_ir_off()
+                voegeli_monitor.tcp_cmd_ack_queue.put("[ACK] IR OFF executed")
+            elif "[CMD] GET IR STATE" in cmd_string:
+                ir_state = get_ir_led_state()
+                voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] IR STATE is {'ON' if ir_state else 'OFF'}")
+            elif "[CMD] IR FILTER ON" in cmd_string:
+                voegeli_monitor.tcp_cmd_ack_queue.put("[ACK] IR FILTER ON executed")
+            elif "[CMD] IR FILTER OFF" in cmd_string:
+                voegeli_monitor.tcp_cmd_ack_queue.put("[ACK] IR FILTER OFF executed")
+            elif "[CMD] GET IR FILTER STATE" in cmd_string:
+                ir_filter_state = False
+                voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] IR FILTER STATE is {'ON' if ir_filter_state else 'OFF'}")
+            elif "[CMD] add newsletter=" in cmd_string:
+                email = cmd_string.split(b'=')[1].strip()
+                csv_file = 'newsletter_subscribers.csv'
+                # Check if the email is already in the file
+                email_exists = False
+                try:
+                    with open(csv_file, mode='r') as file:
+                        reader = csv.reader(file)
+                        for row in reader:
+                            if row and row[0].encode() == email:
+                                email_exists = True
+                                break
+                except FileNotFoundError:
+                    pass  # File does not exist yet
+
+                if not email_exists:
+                    with open(csv_file, mode='a', newline='') as file:
+                        writer = csv.writer(file)
+                        writer.writerow([email.decode()])
+                    voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Email {email.decode()} added to newsletter")
+                else:
+                    voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Email {email.decode()} already in newsletter")
+            elif "[CMD] remove newsletter=" in cmd_string:
+                email = cmd_string.split(b'=')[1].strip()
+                csv_file = 'newsletter_subscribers.csv'
+                # Read all emails and filter out the one to remove
+                emails = []
+                try:
+                    with open(csv_file, mode='r') as file:
+                        reader = csv.reader(file)
+                        for row in reader:
+                            if row and row[0].encode() != email:
+                                emails.append(row[0])
+                    # Write back the filtered list
+                    with open(csv_file, mode='w', newline='') as file:
+                        writer = csv.writer(file)
+                        for em in emails:
+                            writer.writerow([em])
+                    voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Email {email.decode()} removed from newsletter")
+                except FileNotFoundError:
+                    voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Newsletter file not found")
+            elif "[CMD] save image" in cmd_string:
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                image_path = os.path.join("gallery", f"{timestamp}.jpg")
+
+                subprocess.run([
+                    "ffmpeg",
+                    "-i", voegeli_monitor.mediamtx_url,
+                    "-frames:v", "1",
+                    image_path
+                ], check=True)
+                voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Image saved to {image_path}")
+
+        except queue.Empty:
+            time.sleep(1)
