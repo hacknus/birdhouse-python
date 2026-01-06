@@ -343,7 +343,7 @@ class VoegeliMonitor:
                 turn_off_ir_led = None
                 voegeli_monitor.tcp_rep_queue.put("[REP] IR LED STATE: OFF")
                 turn_ir_off()
-            time.sleep(60)
+            time.sleep(sample_rate)
 
 
 if __name__ == "__main__":

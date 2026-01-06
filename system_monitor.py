@@ -29,19 +29,17 @@ class SystemMonitoring:
 
         while True:
 
-            output = subprocess.check_output(["df", "-h"])
-
-            # Convert the output to string and split it by lines
-            lines = output.decode("utf-8").split("\n")
-
             # Loop through the lines to find the information for /dev/root
-            for line in lines:
-                if "/dev/root" in line:
-                    # Split the line by whitespace and extract the required fields
-                    fields = line.split()
+            output = subprocess.check_output(["df", "-h"])
+            lines = output.decode("utf-8").splitlines()
+
+            for line in lines[1:]:  # skip header
+                fields = line.split()
+                if len(fields) >= 6 and fields[5] == "/":
                     self.disk_size = fields[1]
                     self.disk_used = fields[2]
                     self.disk_perc = float(fields[4].replace("%", ""))
+                    break
 
             # Get CPU usage
             self.cpu_perc = psutil.cpu_percent()
@@ -66,4 +64,4 @@ class SystemMonitoring:
             memory = psutil.virtual_memory()
             self.memory_perc = memory.percent
 
-            time.sleep(4)
+            time.sleep(10)
