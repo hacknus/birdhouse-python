@@ -362,8 +362,8 @@ if __name__ == "__main__":
     while True:
         try:
             cmd = voegeli_monitor.tcp_cmd_queue.get(block=False)
-            logging.debug(f"[TCP] revived: {cmd.decode()}")
-            cmd_string = cmd.decode()
+            logging.debug(f"[TCP] revived: {cmd}")
+            cmd_string = cmd
             if "[CMD] IR ON" in cmd_string:
                 turn_ir_on()
                 voegeli_monitor.tcp_cmd_ack_queue.put("[ACK] IR ON executed")
