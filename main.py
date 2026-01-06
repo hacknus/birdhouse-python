@@ -7,7 +7,7 @@ from gpiozero import MotionSensor
 
 import time
 import board
-import adafruit_sht4x
+import adafruit_sht4x, adafruit_scd4x, adafruit_tsl2561
 
 import csv
 import datetime
@@ -65,7 +65,11 @@ class VoegeliMonitor:
         # self.sht_outside = adafruit_sht4x.SHT4x(i2c)
 
         # CO2 sensor inside
-        # ...
+        # self.co2_sensor = adafruit_scd4x.SCD4X(i2c)
+        # self.co2_sensor.start_periodic_measurement()
+
+        # Luminosity sensor
+        # self.luminosity_sensor = adafruit_tsl2561.TSL2561(i2c)
 
         # GPIO Motion Sensor Setup
         MOTION_PIN = 4
@@ -101,10 +105,23 @@ class VoegeliMonitor:
                                      ip="0.0.0.0")
 
     # Function to read temperature and humidity
-    def read_temperature_humidity(self, sensor):
-        temperature = round(sensor.temperature, 2)
-        humidity = round(sensor.relative_humidity, 2)
+    def read_temperature_humidity(self, sht4x):
+        temperature = round(sht4x.temperature, 2)
+        humidity = round(sht4x.relative_humidity, 2)
         return temperature, humidity
+
+    def read_co2_sensor(self, scd4x):
+        if scd4x.data_ready:
+            return round(scd4x.temperature, 2), round(scd4x.relative_humidity, 2), scd4x.CO2
+        else:
+            return None, None, None
+
+    def read_luminosity_sensor(self, tsl2561):
+        luminosity = tsl2561.lux
+        if luminosity is not None:
+            return round(luminosity, 2)
+        else:
+            return None
 
     def query_database_last(self, data_since='1m', bucket='COCoNuT', field='heating_set_temperature', unit="Kelvin"):
         """Query a database field during the specified time period."""
@@ -123,14 +140,6 @@ class VoegeliMonitor:
                 temperatures.append(record.values['_value'])
 
         return temperatures[-1]
-
-    def write_value_to_db(self, value, name, unit, location="Gallery B32", measurement=None):
-        assert self.bucket and self.org, 'Bucket and Org must be defined in .env file.'
-        if measurement is None:
-            measurement = self.measurement_name
-        field = name
-        p = influxdb_client.Point(measurement).tag("location", location).tag("unit", unit).field(field, value)
-        self.write_api.write(bucket=self.bucket, org=self.org, record=p)
 
     def write_device_data_to_db(self, device_data, measurement=None):
         assert self.bucket and self.org, 'Bucket and Org must be defined in .env file.'
@@ -195,6 +204,10 @@ class VoegeliMonitor:
                 'inside_humidity_unit': '%',
                 # 'inside_co2': inside_co2,
                 # 'inside_co2_unit': 'ppm',
+                # 'inside_co2_temperature': inside_co2_temperature,
+                # 'inside_co2_temperature_unit': 'Celsius',
+                # 'inside_co2_humidity': inside_co2_humidity,
+                # 'inside_co2_humidity_unit': '%',
                 # 'luminosity': luminosity,
                 # 'luminosity_unit': 'lux',
                 'motion': motion_triggered,
@@ -328,6 +341,7 @@ class VoegeliMonitor:
                 turn_off_ir_led = time.time() + 5 * 60
             if turn_off_ir_led is not None and turn_off_ir_led < time.time() and get_ir_led_state():
                 turn_off_ir_led = None
+                voegeli_monitor.tcp_rep_queue.put("[REP] IR LED STATE: OFF")
                 turn_ir_off()
             time.sleep(60)
 
@@ -342,11 +356,14 @@ if __name__ == "__main__":
 
     voegeli_monitor = VoegeliMonitor()
 
+    old_ir_led_state = False
+    old_ir_filter_state = False
+
     while True:
         try:
             cmd = voegeli_monitor.tcp_cmd_queue.get(block=False)
-            logging.debug(f"[TCP] revived: {cmd.encode()}")
-            cmd_string = cmd.encode()
+            logging.debug(f"[TCP] revived: {cmd.decode()}")
+            cmd_string = cmd.decode()
             if "[CMD] IR ON" in cmd_string:
                 turn_ir_on()
                 voegeli_monitor.tcp_cmd_ack_queue.put("[ACK] IR ON executed")
@@ -418,3 +435,13 @@ if __name__ == "__main__":
 
         except queue.Empty:
             time.sleep(1)
+
+        if old_ir_led_state != get_ir_led_state():
+            logging.info(f"IR LED state changed to {'ON' if get_ir_led_state() else 'OFF'}")
+            voegeli_monitor.tcp_rep_queue.put("[REP] IR LED STATE: " + ('ON' if get_ir_led_state() else 'OFF'))
+            old_ir_led_state = get_ir_led_state()
+
+        # if old_ir_filter_state != get_ir_filter_state():
+        #     logging.info(f"IR Filter state changed to {'ON' if get_ir_filter_state() else 'OFF'}")
+        # .   voegeli_monitor.tcp_rep_queue.put("[REP] IR FILTER STATE: " + ('ON' if get_ir_filter_state() else 'OFF'))
+        #     old_ir_filter_state = get_ir_filter_state()

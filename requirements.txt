@@ -10,3 +10,4 @@ adafruit-circuitpython-sht4x
 opencv-python
 influxdb-client
 python-dotenv
+pycryptodo
