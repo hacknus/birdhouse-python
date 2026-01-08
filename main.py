@@ -9,6 +9,9 @@ from gpiozero import MotionSensor
 import time
 import board
 import adafruit_sht4x, adafruit_scd4x, adafruit_tsl2561
+from sensirion_i2c_driver import LinuxI2cTransceiver, I2cConnection, CrcCalculator
+from sensirion_driver_adapters.i2c_adapter.i2c_channel import I2cChannel
+from sensirion_i2c_sht4x.device import Sht4xDevice
 
 import csv
 import datetime
@@ -61,13 +64,17 @@ class VoegeliMonitor:
         # I2C sensor setup
         i2c = board.I2C()
 
-        i2c3 = busio.I2C(board.SDA3, board.SCL3)
-
         # SHT4x Temperature and Humidity Sensor inside
         self.sht_inside = adafruit_sht4x.SHT4x(i2c)
 
         # SHT4x Temperature and Humidity Sensor inside
-        self.sht_outside = adafruit_sht4x.SHT4x(i2c3)
+        self.sht4x_outside_transceiver = LinuxI2cTransceiver("/dev/i2c-3")
+        self.sht4x_outside_channel = I2cChannel(
+            I2cConnection(self.sht4x_outside_transceiver),
+            slave_address=0x44,  # or 0x45 if needed
+            crc=CrcCalculator(8, 0x31, 0xFF, 0x00),
+        )
+        self.sht_outside = Sht4xDevice(self.sht4x_outside_channel)
 
         # CO2 sensor inside
         self.co2_sensor = adafruit_scd4x.SCD4X(i2c)
@@ -109,11 +116,19 @@ class VoegeliMonitor:
                                      port=65432,
                                      ip="0.0.0.0")
 
+    def shutdown(self):
+        try:
+            self.sht4x_outside_transceiver.close()
+        except Exception:
+            pass
+
     # Function to read temperature and humidity
-    def read_temperature_humidity(self, sht4x):
-        temperature = round(sht4x.temperature, 2)
-        humidity = round(sht4x.relative_humidity, 2)
-        return temperature, humidity
+    def read_temperature_humidity(self, sensor, sensirion=False):
+        if sensirion:
+            t, rh = sensor.measure_lowest_precision()
+            return round(t.value, 2), round(rh.value, 2)
+        else:
+            return round(sensor.temperature, 2), round(sensor.relative_humidity, 2)
 
     def read_co2_sensor(self, scd4x):
         if scd4x.data_ready:
@@ -243,7 +258,10 @@ class VoegeliMonitor:
 
         current_time = time.time()
         inside_temperature, inside_humidity = self.read_temperature_humidity(self.sht_inside)
-        outside_temperature, outside_humidity = self.read_temperature_humidity(self.sht_outside)
+        outside_temperature, outside_humidity = self.read_temperature_humidity(
+            self.sht_outside,
+            sensirion=True
+        )
         inside_co2, inside_co2_temperature, inside_co2_humidity = self.read_co2_sensor(self.co2_sensor)
         luminosity = self.read_luminosity_sensor(self.luminosity_sensor)
         self.store_sensor_data(inside_temperature, inside_humidity,
