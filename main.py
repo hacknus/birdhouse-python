@@ -61,7 +61,8 @@ class VoegeliMonitor:
         # I2C sensor setup
         i2c = board.I2C()
 
-        i2c3 = busio.I2C(busnum=3)
+        i2c3 = busio.I2C(board.SDA3, board.SCL3)
+
         # SHT4x Temperature and Humidity Sensor inside
         self.sht_inside = adafruit_sht4x.SHT4x(i2c)
 
