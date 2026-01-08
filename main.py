@@ -3,7 +3,7 @@ import subprocess
 from pathlib import Path
 import logging
 
-from smbus2 import SMBus
+import busio
 from gpiozero import MotionSensor
 
 import time
@@ -61,7 +61,7 @@ class VoegeliMonitor:
         # I2C sensor setup
         i2c = board.I2C()
 
-        i2c3 = SMBus(3)
+        i2c3 = busio.I2C(busnum=3)
         # SHT4x Temperature and Humidity Sensor inside
         self.sht_inside = adafruit_sht4x.SHT4x(i2c)
 
