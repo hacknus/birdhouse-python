@@ -132,7 +132,7 @@ class VoegeliMonitor:
 
     def read_co2_sensor(self, scd4x):
         if scd4x.data_ready:
-            return round(scd4x.temperature, 2), round(scd4x.relative_humidity, 2), scd4x.CO2
+            return scd4x.CO2, round(scd4x.temperature, 2), round(scd4x.relative_humidity, 2)
         else:
             return None, None, None
 
