@@ -17,7 +17,7 @@ import threading
 from audio_stream import run_audiostream
 from system_monitor import SystemMonitoring
 from ignore_motion import are_we_still_blocked
-from camera import turn_ir_on, turn_ir_off, get_ir_led_state
+from camera import turn_ir_on, turn_ir_off, get_ir_led_state, get_ir_filter_state
 from encoding import encode_email
 
 from unibe_mail import Reporter
@@ -41,6 +41,8 @@ class VoegeliMonitor:
     def __init__(self, env_file: Path = Path('./.env')):
 
         self.task_is_running = True
+        # Track last image save time and last email sent time
+        self.last_image_time = 0
 
         env_values = dotenv_values(env_file)
         self.mediamtx_url = env_values['IMAGE_GRAB_URL']
@@ -62,14 +64,14 @@ class VoegeliMonitor:
         self.sht_inside = adafruit_sht4x.SHT4x(i2c)
 
         # SHT4x Temperature and Humidity Sensor inside
-        # self.sht_outside = adafruit_sht4x.SHT4x(i2c)
+        self.sht_outside = adafruit_sht4x.SHT4x(i2c)
 
         # CO2 sensor inside
-        # self.co2_sensor = adafruit_scd4x.SCD4X(i2c)
-        # self.co2_sensor.start_periodic_measurement()
+        self.co2_sensor = adafruit_scd4x.SCD4X(i2c)
+        self.co2_sensor.start_periodic_measurement()
 
         # Luminosity sensor
-        # self.luminosity_sensor = adafruit_tsl2561.TSL2561(i2c)
+        self.luminosity_sensor = adafruit_tsl2561.TSL2561(i2c)
 
         # GPIO Motion Sensor Setup
         MOTION_PIN = 4
@@ -80,9 +82,9 @@ class VoegeliMonitor:
         # replace this with custom email-interface
         self.email_reporter = Reporter("Voegeli")
 
-        # self.audio_stream_thread = threading.Thread(target=run_audiostream)
-        # self.audio_stream_thread.daemon = True
-        # self.audio_stream_thread.start()
+        self.audio_stream_thread = threading.Thread(target=run_audiostream)
+        self.audio_stream_thread.daemon = True
+        self.audio_stream_thread.start()
 
         self.system_monitoring = SystemMonitoring()
         self.sys_monitoring_thread = threading.Thread(target=self.system_monitoring.monitor_system)
@@ -174,6 +176,8 @@ class VoegeliMonitor:
 
     # Function to store sensor data in the database
     def store_sensor_data(self, inside_temperature, inside_humidity, outside_temperature, outside_humidity, inside_co2,
+                          inside_co2_temperature, inside_co2_humidity,
+                          luminosity,
                           motion_triggered):
         device_data = {
             'device': 'voegeli',
@@ -194,22 +198,22 @@ class VoegeliMonitor:
                 'memory_perc': self.system_monitoring.memory_perc,
                 # ambient data
 
-                # 'outside_temperature': outside_temperature,
-                # 'outside_temperature_unit': 'Celsius',
-                # 'outside_humidity': outside_humidity,
-                # 'outside_humidity_unit': '%',
+                'outside_temperature': outside_temperature,
+                'outside_temperature_unit': 'Celsius',
+                'outside_humidity': outside_humidity,
+                'outside_humidity_unit': '%',
                 'inside_temperature': inside_temperature,
                 'inside_temperature_unit': 'Celsius',
                 'inside_humidity': inside_humidity,
                 'inside_humidity_unit': '%',
-                # 'inside_co2': inside_co2,
-                # 'inside_co2_unit': 'ppm',
-                # 'inside_co2_temperature': inside_co2_temperature,
-                # 'inside_co2_temperature_unit': 'Celsius',
-                # 'inside_co2_humidity': inside_co2_humidity,
-                # 'inside_co2_humidity_unit': '%',
-                # 'luminosity': luminosity,
-                # 'luminosity_unit': 'lux',
+                'inside_co2': inside_co2,
+                'inside_co2_unit': 'ppm',
+                'inside_co2_temperature': inside_co2_temperature,
+                'inside_co2_temperature_unit': 'Celsius',
+                'inside_co2_humidity': inside_co2_humidity,
+                'inside_co2_humidity_unit': '%',
+                'luminosity': luminosity,
+                'luminosity_unit': 'lux',
                 'motion': motion_triggered,
             }
         }
@@ -224,11 +228,7 @@ class VoegeliMonitor:
                 OSError) as e:
             logging.warning(f"Database connection error, skipping this update: {e}")
 
-    # Track last image save time and last email sent time
-    last_image_time = 0
-
     def motion_detected_callback(self):
-        global last_image_time
 
         # Check if motion detection should be ignored
         if are_we_still_blocked():
@@ -240,15 +240,17 @@ class VoegeliMonitor:
 
         current_time = time.time()
         inside_temperature, inside_humidity = self.read_temperature_humidity(self.sht_inside)
-        outside_temperature, outside_humidity = 0, 0  # self.read_temperature_humidity(self.sht_outside)
-        inside_co2 = 0  # read_co2_sensor()
+        outside_temperature, outside_humidity = self.read_temperature_humidity(self.sht_outside)
+        inside_co2, inside_co2_temperature, inside_co2_humidity = self.read_co2_sensor(self.co2_sensor)
+        luminosity = self.read_luminosity_sensor(self.luminosity_sensor)
         self.store_sensor_data(inside_temperature, inside_humidity,
                                outside_temperature, outside_humidity,
-                               inside_co2,
+                               inside_co2, inside_co2_temperature, inside_co2_humidity,
+                               luminosity,
                                motion_triggered=True)
 
         # Save an image only if at least an hour has passed
-        if current_time - last_image_time >= 3600:
+        if current_time - self.last_image_time >= 3600:
             # todo: only do this if the light is not on
             turn_ir_on()
             time.sleep(3)
@@ -256,18 +258,27 @@ class VoegeliMonitor:
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             image_path = os.path.join("gallery", f"{timestamp}.jpg")
 
-            subprocess.run([
-                "ffmpeg",
-                "-i", self.mediamtx_url,
-                "-frames:v", "1",
-                image_path
-            ], check=True)
+            if not get_ir_filter_state():
+                subprocess.run([
+                    "ffmpeg",
+                    "-i", self.mediamtx_url,
+                    "-vf", "format=gray",
+                    "-frames:v", "1",
+                    image_path
+                ], check=True)
+            else:
+                subprocess.run([
+                    "ffmpeg",
+                    "-i", self.mediamtx_url,
+                    "-frames:v", "1",
+                    image_path
+                ], check=True)
 
             # frame = camera_stream.get_frame()
             #
             # cv2.imwrite(image_path, frame)
 
-            last_image_time = current_time
+            self.last_image_time = current_time
 
             turn_ir_off()
 
@@ -425,12 +436,21 @@ if __name__ == "__main__":
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 image_path = os.path.join("gallery", f"{timestamp}.jpg")
 
-                subprocess.run([
-                    "ffmpeg",
-                    "-i", voegeli_monitor.mediamtx_url,
-                    "-frames:v", "1",
-                    image_path
-                ], check=True)
+                if not get_ir_filter_state():
+                    subprocess.run([
+                        "ffmpeg",
+                        "-i", voegeli_monitor.mediamtx_url,
+                        "-vf", "format=gray",
+                        "-frames:v", "1",
+                        image_path
+                    ], check=True)
+                else:
+                    subprocess.run([
+                        "ffmpeg",
+                        "-i", voegeli_monitor.mediamtx_url,
+                        "-frames:v", "1",
+                        image_path
+                    ], check=True)
                 voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Image saved to {image_path}")
 
         except queue.Empty:
