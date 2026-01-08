@@ -460,30 +460,30 @@ if __name__ == "__main__":
                     voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Email {email.decode()} removed from newsletter")
                 except FileNotFoundError:
                     voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Newsletter file not found")
-                    elif "[CMD] save image" in cmd_string:
-                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                    image_path = os.path.join("gallery", f"{timestamp}.jpg")
+            elif "[CMD] save image" in cmd_string:
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                image_path = os.path.join("gallery", f"{timestamp}.jpg")
 
-                    try:
-                        if not get_ir_filter_state():
-                            subprocess.run([
-                                "ffmpeg",
-                                "-i", voegeli_monitor.mediamtx_url,
-                                "-vf", "format=gray",
-                                "-frames:v", "1",
-                                image_path
-                            ], check=True, capture_output=True, text=True)
-                        else:
-                            subprocess.run([
-                                "ffmpeg",
-                                "-i", voegeli_monitor.mediamtx_url,
-                                "-frames:v", "1",
-                                image_path
-                            ], check=True, capture_output=True, text=True)
-                        voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Image saved to {image_path}")
-                    except subprocess.CalledProcessError as e:
-                        logging.error(f"Failed to save image: {e.stderr}")
-                        voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Failed to save image: MediaMTX server error")
+                try:
+                    if not get_ir_filter_state():
+                        subprocess.run([
+                            "ffmpeg",
+                            "-i", voegeli_monitor.mediamtx_url,
+                            "-vf", "format=gray",
+                            "-frames:v", "1",
+                            image_path
+                        ], check=True, capture_output=True, text=True)
+                    else:
+                        subprocess.run([
+                            "ffmpeg",
+                            "-i", voegeli_monitor.mediamtx_url,
+                            "-frames:v", "1",
+                            image_path
+                        ], check=True, capture_output=True, text=True)
+                    voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Image saved to {image_path}")
+                except subprocess.CalledProcessError as e:
+                    logging.error(f"Failed to save image: {e.stderr}")
+                    voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Failed to save image: MediaMTX server error")
         except queue.Empty:
             time.sleep(1)
 
