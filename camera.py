@@ -48,7 +48,7 @@ def turn_ir_filter_on():
     ir_filter_state = True
     GPIO.output(IR_FILTER_A_PIN, GPIO.HIGH)
     GPIO.output(IR_FILTER_B_PIN, GPIO.LOW)
-    time.sleep(0.5)
+    time.sleep(1.0)
     GPIO.output(IR_FILTER_A_PIN, GPIO.LOW)
     GPIO.output(IR_FILTER_B_PIN, GPIO.LOW)
 
@@ -59,7 +59,7 @@ def turn_ir_filter_off():
     ir_filter_state = False
     GPIO.output(IR_FILTER_A_PIN, GPIO.LOW)
     GPIO.output(IR_FILTER_B_PIN, GPIO.HIGH)
-    time.sleep(0.5)
+    time.sleep(1.0)
     GPIO.output(IR_FILTER_A_PIN, GPIO.LOW)
     GPIO.output(IR_FILTER_B_PIN, GPIO.LOW)
 
