@@ -17,7 +17,7 @@ import threading
 from audio_stream import run_audiostream
 from system_monitor import SystemMonitoring
 from ignore_motion import are_we_still_blocked
-from camera import turn_ir_on, turn_ir_off, get_ir_led_state, get_ir_filter_state
+from camera import turn_ir_on, turn_ir_off, get_ir_led_state, get_ir_filter_state, turn_ir_filter_off, turn_ir_filter_on
 from encoding import encode_email
 
 from unibe_mail import Reporter
@@ -385,11 +385,13 @@ if __name__ == "__main__":
                 ir_state = get_ir_led_state()
                 voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] IR STATE is {'ON' if ir_state else 'OFF'}")
             elif "[CMD] IR FILTER ON" in cmd_string:
+                turn_ir_filter_on()
                 voegeli_monitor.tcp_cmd_ack_queue.put("[ACK] IR FILTER ON executed")
             elif "[CMD] IR FILTER OFF" in cmd_string:
+                turn_ir_filter_off()
                 voegeli_monitor.tcp_cmd_ack_queue.put("[ACK] IR FILTER OFF executed")
             elif "[CMD] GET IR FILTER STATE" in cmd_string:
-                ir_filter_state = False
+                ir_filter_state = get_ir_filter_state()
                 voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] IR FILTER STATE is {'ON' if ir_filter_state else 'OFF'}")
             elif "[CMD] add newsletter=" in cmd_string:
                 email = cmd_string.split(b'=')[1].strip()
