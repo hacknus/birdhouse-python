@@ -362,12 +362,18 @@ class VoegeliMonitor:
         turn_off_ir_led = None
         while True:
             inside_temperature, inside_humidity = self.read_temperature_humidity(self.sht_inside)
-            outside_temperature, outside_humidity = 0, 0  # self.read_temperature_humidity(self.sht_outside)
-            inside_co2 = 0  # read_co2_sensor()
+            outside_temperature, outside_humidity = self.read_temperature_humidity(
+                self.sht_outside,
+                sensirion=True
+            )
+            inside_co2, inside_co2_temperature, inside_co2_humidity = self.read_co2_sensor(self.co2_sensor)
+            luminosity = self.read_luminosity_sensor(self.luminosity_sensor)
             self.store_sensor_data(inside_temperature, inside_humidity,
                                    outside_temperature, outside_humidity,
-                                   inside_co2,
-                                   motion_triggered=False)
+                                   inside_co2, inside_co2_temperature, inside_co2_humidity,
+                                   luminosity,
+                                   motion_triggered=True)
+
             if turn_off_ir_led is None and get_ir_led_state():
                 # set turn-off to now + 5 minutes
                 turn_off_ir_led = time.time() + 5 * 60
