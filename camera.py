@@ -13,10 +13,15 @@ IR_LED_PIN = 17  # Change this pin number to match your setup
 IR_FILTER_A_PIN = 20
 IR_FILTER_B_PIN = 21
 GPIO.setup(IR_LED_PIN, GPIO.OUT)
+GPIO.setup(IR_FILTER_A_PIN, GPIO.OUT)
+GPIO.setup(IR_FILTER_B_PIN, GPIO.OUT)
 ignore_motion_for(10)
 GPIO.output(IR_LED_PIN, GPIO.LOW)
+GPIO.output(IR_FILTER_A_PIN, GPIO.LOW)
+GPIO.output(IR_FILTER_B_PIN, GPIO.LOW)
 
 ir_led_state = False
+ir_filter_state = False
 
 
 def turn_ir_on():
