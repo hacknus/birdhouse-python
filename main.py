@@ -371,7 +371,7 @@ class VoegeliMonitor:
                                    outside_temperature, outside_humidity,
                                    inside_co2, inside_co2_temperature, inside_co2_humidity,
                                    luminosity,
-                                   motion_triggered=True)
+                                   motion_triggered=False)
 
             if turn_off_ir_led is None and get_ir_led_state():
                 # set turn-off to now + 5 minutes
