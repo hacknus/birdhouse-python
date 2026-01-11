@@ -57,6 +57,12 @@ class SystemMonitoring:
             last_downloaded_bytes = downloaded_bytes
             last_measurement_time = measurement_time
 
+            # prevent overflow
+            if self.downloaded_bytes_per_s < 0:
+                self.downloaded_bytes_per_s = None
+            if self.uploaded_bytes_per_s < 0:
+                self.uploaded_bytes_per_s = None
+
             # Get CPU temp
             self.cpu_temp = psutil.sensors_temperatures()['cpu_thermal'][0].current
 
