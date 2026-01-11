@@ -279,9 +279,10 @@ class VoegeliMonitor:
             image_path = os.path.join("gallery", f"{timestamp}.jpg")
 
             try:
-                if not get_ir_filter_state():
+                if not get_ir_filter_state() and False:
                     subprocess.run([
                         "ffmpeg",
+                        "-rtsp_transport", "tcp",
                         "-i", self.mediamtx_url,
                         "-vf", "format=gray",
                         "-frames:v", "1",
@@ -290,8 +291,11 @@ class VoegeliMonitor:
                 else:
                     subprocess.run([
                         "ffmpeg",
+                        "-rtsp_transport", "tcp",
                         "-i", self.mediamtx_url,
                         "-frames:v", "1",
+                        "-q:v", "2",
+                        "-y",
                         image_path
                     ], check=True, capture_output=True, text=True)
 
@@ -465,7 +469,7 @@ if __name__ == "__main__":
                 image_path = os.path.join("gallery", f"{timestamp}.jpg")
 
                 try:
-                    if not get_ir_filter_state():
+                    if not get_ir_filter_state() and False:
                         subprocess.run([
                             "ffmpeg",
                             "-i", voegeli_monitor.mediamtx_url,
@@ -476,8 +480,11 @@ if __name__ == "__main__":
                     else:
                         subprocess.run([
                             "ffmpeg",
+                            "-rtsp_transport", "tcp",
                             "-i", voegeli_monitor.mediamtx_url,
                             "-frames:v", "1",
+                            "-q:v", "2",
+                            "-y",
                             image_path
                         ], check=True, capture_output=True, text=True)
                     voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Image saved to {image_path}")
