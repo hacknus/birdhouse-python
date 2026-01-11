@@ -92,9 +92,9 @@ class VoegeliMonitor:
         # replace this with custom email-interface
         self.email_reporter = Reporter("Voegeli")
 
-        self.audio_stream_thread = threading.Thread(target=run_audiostream)
-        self.audio_stream_thread.daemon = True
-        self.audio_stream_thread.start()
+        # self.audio_stream_thread = threading.Thread(target=run_audiostream)
+        # self.audio_stream_thread.daemon = True
+        # self.audio_stream_thread.start()
 
         self.system_monitoring = SystemMonitoring()
         self.sys_monitoring_thread = threading.Thread(target=self.system_monitoring.monitor_system)
