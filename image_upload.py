@@ -1,7 +1,7 @@
 import requests
 
 
-def upload_image(image_path, token="5c9233319683215e48b6ca222565d8f3cb185301ec6ded463f6592aeb1704c0a",
+def upload_image(image_path, token="your-token-here",
                  url="http://localhost:8080/api/upload_image1985909069561561095"):
     """Upload an image using Dioxus server function"""
 

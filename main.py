@@ -19,6 +19,7 @@ import os
 import threading
 
 from audio_stream import run_audiostream
+from image_upload import upload_image
 from system_monitor import SystemMonitoring
 from ignore_motion import are_we_still_blocked
 from camera import turn_ir_on, turn_ir_off, get_ir_led_state, get_ir_filter_state, turn_ir_filter_off, turn_ir_filter_on
@@ -54,6 +55,8 @@ class VoegeliMonitor:
         self.org = env_values['INFLUXDB_ORG']
         self.token = env_values['INFLUXDB_TOKEN']
         self.url = env_values['INFLUXDB_URL']
+        self.upload_image_token = env_values['UPLOAD_IMAGE_TOKEN']
+        self.upload_image_url = env_values['UPLOAD_IMAGE_URL']
 
         assert self.org and self.token and self.url and self.bucket, 'URL, Token, Org and Bucket must be defined in .env file'
         self.client = influxdb_client.InfluxDBClient(url=self.url, token=self.token, org=self.org, verify_ssl=False)
@@ -300,6 +303,9 @@ class VoegeliMonitor:
                     ], check=True, capture_output=True, text=True)
 
                 self.last_image_time = current_time
+                upload_image(image_path=image_path, token=self.upload_image_token,
+                             url=self.upload_image_url)
+                os.remove(image_path)
             except subprocess.CalledProcessError as e:
                 logging.error(f"Failed to capture image: {e.stderr}")
                 print(f"Failed to capture image from MediaMTX server: {e}")
@@ -467,7 +473,6 @@ if __name__ == "__main__":
             elif "[CMD] save image" in cmd_string:
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 image_path = os.path.join("gallery", f"{timestamp}.jpg")
-
                 try:
                     if not get_ir_filter_state() and False:
                         subprocess.run([
@@ -488,6 +493,9 @@ if __name__ == "__main__":
                             image_path
                         ], check=True, capture_output=True, text=True)
                     voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Image saved to {image_path}")
+                    upload_image(image_path=image_path, token=voegeli_monitor.upload_image_token,
+                                 url=voegeli_monitor.upload_image_url)
+                    os.remove(image_path)
                 except subprocess.CalledProcessError as e:
                     logging.error(f"Failed to save image: {e.stderr}")
                     voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Failed to save image: MediaMTX server error")
