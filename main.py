@@ -41,6 +41,8 @@ import influxdb_client.rest
 import influxdb_client
 from influxdb_client.client.write_api import SYNCHRONOUS
 
+import numpy as np
+
 
 class VoegeliMonitor:
     def __init__(self, env_file: Path = Path('./.env')):
@@ -195,11 +197,17 @@ class VoegeliMonitor:
                 points.append(p)
         self.write_api.write(bucket=self.bucket, org=self.org, record=points)
 
+    def probability(self, l, a=5.59102479e-23, b=5.88450075e+01, c=2.95824154e-02, d=4.80872286e+02):
+        return a * np.exp(-np.array(l) * c + b) + d
+
     # Function to store sensor data in the database
     def store_sensor_data(self, inside_temperature, inside_humidity, outside_temperature, outside_humidity, inside_co2,
                           inside_co2_temperature, inside_co2_humidity,
                           luminosity,
                           motion_triggered):
+
+        probability = np.clip((self.probability(luminosity) - 4.8e2) / 400, 0.01, 0.99)
+
         device_data = {
             'device': 'voegeli',
             'data': {
@@ -236,6 +244,8 @@ class VoegeliMonitor:
                 'luminosity': luminosity,
                 'luminosity_unit': 'lux',
                 'motion': motion_triggered,
+
+                'probability': probability,
             }
         }
 
