@@ -199,7 +199,7 @@ class VoegeliMonitor:
 
     def probability(self, l, a=5.59102479e-23, b=5.88450075e+01, c=2.95824154e-02, d=4.80872286e+02):
         if l is None:
-            return 0.01
+            return 0.99
         return a * np.exp(-np.array(l) * c + b) + d
 
     # Function to store sensor data in the database
