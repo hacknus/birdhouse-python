@@ -197,6 +197,7 @@ class VoegeliMonitor:
                 points.append(p)
         self.write_api.write(bucket=self.bucket, org=self.org, record=points)
 
+    # Probability that a bird is in the birdhouse, based on luminosity
     def probability(self, l, a=5.59102479e-23, b=5.88450075e+01, c=2.95824154e-02, d=4.80872286e+02):
         if l is None:
             return 0.99
