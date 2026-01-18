@@ -200,7 +200,7 @@ class VoegeliMonitor:
     def probability(self, l, a=5.59102479e-23, b=5.88450075e+01, c=2.95824154e-02, d=4.80872286e+02):
         if l is None:
             return 0.99
-        return a * np.exp(-np.array(l) * c + b) + d
+        return np.clip((a * np.exp(-np.array(l) * c + b) + d - 4.8e2) / 400, 0.01, 0.99)
 
     # Function to store sensor data in the database
     def store_sensor_data(self, inside_temperature, inside_humidity, outside_temperature, outside_humidity, inside_co2,
@@ -208,7 +208,7 @@ class VoegeliMonitor:
                           luminosity,
                           motion_triggered):
 
-        probability = np.clip((self.probability(luminosity) - 4.8e2) / 400, 0.01, 0.99)
+        probability = self.probability(luminosity)
 
         device_data = {
             'device': 'voegeli',
