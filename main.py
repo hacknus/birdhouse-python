@@ -42,6 +42,7 @@ import influxdb_client
 from influxdb_client.client.write_api import SYNCHRONOUS
 
 import numpy as np
+import joblib
 
 
 class VoegeliMonitor:
@@ -50,6 +51,9 @@ class VoegeliMonitor:
         self.task_is_running = True
         # Track last image save time and last email sent time
         self.last_image_time = 0
+
+        self.model_rise = joblib.load("models/bird_model_rise.pkl")
+        self.model_fall = joblib.load("models/bird_model_fall.pkl")
 
         env_values = dotenv_values(env_file)
         self.mediamtx_url = env_values['IMAGE_GRAB_URL']
@@ -197,19 +201,19 @@ class VoegeliMonitor:
                 points.append(p)
         self.write_api.write(bucket=self.bucket, org=self.org, record=points)
 
-    # Probability that a bird is in the birdhouse, based on luminosity
-    def probability(self, l, a=5.59102479e-23, b=5.88450075e+01, c=2.95824154e-02, d=4.80872286e+02):
-        if l is None:
-            return 0.99
-        return np.clip((a * np.exp(-np.array(l) * c + b) + d - 4.8e2) / 400, 0.01, 0.99)
-
     # Function to store sensor data in the database
     def store_sensor_data(self, inside_temperature, inside_humidity, outside_temperature, outside_humidity, inside_co2,
                           inside_co2_temperature, inside_co2_humidity,
                           luminosity,
                           motion_triggered):
 
-        probability = self.probability(luminosity)
+        if luminosity is None:
+            probability = 0.99
+        else:
+            if datetime.datetime.now().hour > 12:
+                probability = self.model_rise.predict_proba([[luminosity]])[0, 1]
+            else:
+                probability = self.model_fall.predict_proba([[luminosity]])[0, 1]
 
         device_data = {
             'device': 'voegeli',
