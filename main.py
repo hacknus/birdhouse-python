@@ -215,6 +215,8 @@ class VoegeliMonitor:
             else:
                 probability = self.model_fall.predict_proba([[luminosity]])[0, 1]
 
+        probability = np.clip(probability, 0.01, 0.99)
+
         device_data = {
             'device': 'voegeli',
             'data': {
