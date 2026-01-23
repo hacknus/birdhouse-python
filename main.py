@@ -94,7 +94,7 @@ class VoegeliMonitor:
 
         # GPIO Motion Sensor Setup
         MOTION_PIN = 4
-        self.pir = MotionSensor(MOTION_PIN, threshold=0.8, queue_len=10)
+        self.pir = MotionSensor(MOTION_PIN, threshold=0.8, queue_len=2)
 
         # email callback
 
