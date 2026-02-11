@@ -4,7 +4,6 @@ from pathlib import Path
 import logging
 
 import busio
-from gpiozero import MotionSensor
 
 import time
 import board
@@ -18,14 +17,11 @@ import datetime
 import os
 import threading
 
-from audio_stream import run_audiostream
 from image_upload import upload_image
+from radar import Radar
 from system_monitor import SystemMonitoring
-from ignore_motion import are_we_still_blocked
-from camera import turn_ir_on, turn_ir_off, get_ir_led_state, get_ir_filter_state, turn_ir_filter_off, turn_ir_filter_on
-from encoding import encode_email
+from camera import turn_ir_on, turn_ir_off, get_ir_led_state
 
-from unibe_mail import Reporter
 from dotenv import dotenv_values
 
 import urllib3
@@ -49,8 +45,6 @@ class VoegeliMonitor:
     def __init__(self, env_file: Path = Path('./.env')):
 
         self.task_is_running = True
-        # Track last image save time and last email sent time
-        self.last_image_time = 0
 
         self.model_rise = joblib.load("models/bird_model_rise.pkl")
         self.model_fall = joblib.load("models/bird_model_fall.pkl")
@@ -92,14 +86,9 @@ class VoegeliMonitor:
         # Luminosity sensor
         self.luminosity_sensor = adafruit_tsl2561.TSL2561(i2c)
 
-        # GPIO Motion Sensor Setup
-        MOTION_PIN = 4
-        self.pir = MotionSensor(MOTION_PIN, threshold=0.8, queue_len=2)
-
-        # email callback
-
-        # replace this with custom email-interface
-        self.email_reporter = Reporter("Voegeli")
+        # motion sensor (A121 radar 60 GHz)
+        self.radar = Radar()
+        self.radar.run()
 
         # self.audio_stream_thread = threading.Thread(target=run_audiostream)
         # self.audio_stream_thread.daemon = True
@@ -252,7 +241,6 @@ class VoegeliMonitor:
                 'inside_co2_humidity_f_unit': '%',
                 'luminosity': luminosity,
                 'luminosity_unit': 'lux',
-                'motion': motion_triggered,
 
                 'probability': probability,
             }
@@ -268,120 +256,6 @@ class VoegeliMonitor:
                 OSError) as e:
             logging.warning(f"Database connection error, skipping this update: {e}")
 
-    def motion_detected_callback(self):
-
-        # Check if motion detection should be ignored
-        if are_we_still_blocked():
-            print("Motion detection temporarily ignored.")
-            return
-        if get_ir_led_state():
-            print("Motion detection ignored because IR LED is on.")
-            return
-
-        current_time = time.time()
-        inside_temperature, inside_humidity = self.read_temperature_humidity(self.sht_inside)
-        outside_temperature, outside_humidity = self.read_temperature_humidity(
-            self.sht_outside,
-            sensirion=True
-        )
-        inside_co2, inside_co2_temperature, inside_co2_humidity = self.read_co2_sensor(self.co2_sensor)
-        luminosity = self.read_luminosity_sensor(self.luminosity_sensor)
-        self.store_sensor_data(inside_temperature, inside_humidity,
-                               outside_temperature, outside_humidity,
-                               inside_co2, inside_co2_temperature, inside_co2_humidity,
-                               luminosity,
-                               motion_triggered=True)
-
-        # Save an image only if at least an hour has passed
-        if current_time - self.last_image_time >= 3600:
-            turn_ir_on()
-            time.sleep(3)
-
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            image_path = os.path.join("gallery", f"{timestamp}.jpg")
-
-            try:
-                if not get_ir_filter_state() and False:
-                    subprocess.run([
-                        "ffmpeg",
-                        "-rtsp_transport", "tcp",
-                        "-i", self.mediamtx_url,
-                        "-vf", "format=gray",
-                        "-frames:v", "1",
-                        image_path
-                    ], check=True, capture_output=True, text=True)
-                else:
-                    subprocess.run([
-                        "ffmpeg",
-                        "-rtsp_transport", "tcp",
-                        "-i", self.mediamtx_url,
-                        "-frames:v", "1",
-                        "-q:v", "2",
-                        "-y",
-                        image_path
-                    ], check=True, capture_output=True, text=True)
-
-                self.last_image_time = current_time
-                upload_image(image_path=image_path, token=self.upload_image_token,
-                             url=self.upload_image_url)
-                os.remove(image_path)
-            except subprocess.CalledProcessError as e:
-                logging.error(f"Failed to capture image: {e.stderr}")
-                print(f"Failed to capture image from MediaMTX server: {e}")
-
-            turn_ir_off()
-
-        # Send an email only if at least a day has passed
-        file_path = "last_email_sent.txt"
-
-        # Read the existing timestamp or initialize it
-        try:
-            with open(file_path, "r+") as f:
-                content = f.readline().strip()
-                last_email_time = int(content) if content else 0  # Convert to int, default to 0 if empty
-                if current_time - last_email_time >= 86400:
-                    try:
-                        csv_file = 'newsletter_subscribers.csv'
-                        with open(csv_file, mode='r') as file:
-                            reader = csv.reader(file)
-                            subscribers = list(reader)
-                            for subscriber in subscribers:
-                                email = subscriber[0]
-                                encoded_email = encode_email(email)
-
-                                base_url = "https://linusleo.synology.me"
-                                unsubscribe_link = f"{base_url}/unsubscribe/{encoded_email}/"
-                                email_body = (
-                                    "Hoi Du!<br>"
-                                    "I just came back and entered my birdhouse!<br>"
-                                    f"Check me out at {base_url}<br>"
-                                    "Best Regards, Your Vögeli<br><br>"
-                                    f'<a href="{unsubscribe_link}">Unsubscribe</a>'
-                                )
-
-                                self.email_reporter.send_mail(
-                                    email_body,
-                                    subject="Vögeli Motion Alert",
-                                    recipients=email,
-                                    is_html=True,
-                                )
-                    except FileNotFoundError:
-                        pass  # File does not exist yet, no subscribers
-                    # Overwrite with the new timestamp
-                    f.seek(0)  # Move to the beginning of the file
-                    new_timestamp = int(current_time)
-                    f.write(str(new_timestamp))
-                    f.truncate()  # Remove any leftover content after the new write
-        except FileNotFoundError:
-            # If the file doesn't exist, create it and write the timestamp
-            with open(file_path, "w") as f:
-                new_timestamp = int(current_time)
-                last_email_time = 0
-                f.write(str(new_timestamp))
-
-        print("Motion detected! Data stored.")
-
-    time.sleep(1)  # Wait for hardware to settle
 
     # Background thread for temperature/humidity logging (runs every 60s)
     def periodic_data_logger(self):
@@ -439,15 +313,6 @@ if __name__ == "__main__":
             elif "[CMD] GET IR STATE" in cmd_string:
                 ir_state = get_ir_led_state()
                 voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] IR STATE is {'ON' if ir_state else 'OFF'}")
-            elif "[CMD] IR FILTER ON" in cmd_string:
-                turn_ir_filter_on()
-                voegeli_monitor.tcp_cmd_ack_queue.put("[ACK] IR FILTER ON executed")
-            elif "[CMD] IR FILTER OFF" in cmd_string:
-                turn_ir_filter_off()
-                voegeli_monitor.tcp_cmd_ack_queue.put("[ACK] IR FILTER OFF executed")
-            elif "[CMD] GET IR FILTER STATE" in cmd_string:
-                ir_filter_state = get_ir_filter_state()
-                voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] IR FILTER STATE is {'ON' if ir_filter_state else 'OFF'}")
             elif "[CMD] add newsletter=" in cmd_string:
                 email = cmd_string.split(b'=')[1].strip()
                 csv_file = 'newsletter_subscribers.csv'
@@ -493,24 +358,16 @@ if __name__ == "__main__":
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 image_path = os.path.join("gallery", f"{timestamp}.jpg")
                 try:
-                    if not get_ir_filter_state() and False:
-                        subprocess.run([
-                            "ffmpeg",
-                            "-i", voegeli_monitor.mediamtx_url,
-                            "-vf", "format=gray",
-                            "-frames:v", "1",
-                            image_path
-                        ], check=True, capture_output=True, text=True)
-                    else:
-                        subprocess.run([
-                            "ffmpeg",
-                            "-rtsp_transport", "tcp",
-                            "-i", voegeli_monitor.mediamtx_url,
-                            "-frames:v", "1",
-                            "-q:v", "2",
-                            "-y",
-                            image_path
-                        ], check=True, capture_output=True, text=True)
+
+                    subprocess.run([
+                        "ffmpeg",
+                        "-rtsp_transport", "tcp",
+                        "-i", voegeli_monitor.mediamtx_url,
+                        "-frames:v", "1",
+                        "-q:v", "2",
+                        "-y",
+                        image_path
+                    ], check=True, capture_output=True, text=True)
                     voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Image saved to {image_path}")
                     upload_image(image_path=image_path, token=voegeli_monitor.upload_image_token,
                                  url=voegeli_monitor.upload_image_url)
