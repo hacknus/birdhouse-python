@@ -374,8 +374,8 @@ class Radar:
                 # radar data
                 'activity': activity,
                 'activity_unit': 'score',
-                'temperature': temperature,
-                'temperature_unit': 'Celsius',
+                'radar_temperature': temperature,
+                'radar_temperature_unit': 'Celsius',
                 'breathing_rate': breathing_rate_bpm,
                 'breathing_rate_unit': 'bpm',
                 'presence_distance': presence_distance_m,
