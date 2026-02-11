@@ -64,7 +64,7 @@ class Radar:
             hwaas: int = 32,
             start_m: float = 0.15,
             end_m: float = 0.6,
-            lowest_bpm: float = 60.0,
+            lowest_bpm: float = 5.0,
             highest_bpm: float = 300.0,
             time_series_s: float = 5.0,
             num_distances: int = 1,
@@ -369,6 +369,15 @@ class Radar:
     def store_radar_data(self, _state, presence_detected, presence_distance_m, breathing_rate_bpm, activity,
                          temperature):
 
+        if presence_distance_m:
+            presence_distance_m = float(presence_distance_m)
+        if activity:
+            activity = float(activity)
+        if temperature:
+            temperature = float(temperature)
+        if breathing_rate_bpm:
+            breathing_rate_bpm = float(breathing_rate_bpm)
+
         device_data = {
             'device': 'voegeli',
             'data': {
@@ -379,8 +388,8 @@ class Radar:
                 'radar_temperature_unit': 'Celsius',
                 'breathing_rate': breathing_rate_bpm,
                 'breathing_rate_unit': 'bpm',
-                'presence_distance': presence_distance_m,
-                'presence_distance_unit': 'm',
+                'object_distance': presence_distance_m,
+                'object_distance_unit': 'm',
                 'motion': presence_detected,
             }
         }
