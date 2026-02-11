@@ -427,7 +427,7 @@ if __name__ == "__main__":
 
     while True:
         try:
-            cmd = voegeli_monitor.tcp_cmd_queue.get(block=False)
+            cmd = voegeli_monitor.tcp_cmd_queue.get(timeout=0.1)
             logging.debug(f"[TCP] revived: {cmd}")
             cmd_string = cmd
             if "[CMD] IR ON" in cmd_string:
@@ -519,7 +519,7 @@ if __name__ == "__main__":
                     logging.error(f"Failed to save image: {e.stderr}")
                     voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Failed to save image: MediaMTX server error")
         except queue.Empty:
-            time.sleep(1)
+            pass
 
         if old_ir_led_state != get_ir_led_state():
             logging.info(f"IR LED state changed to {'ON' if get_ir_led_state() else 'OFF'}")
