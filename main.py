@@ -259,8 +259,6 @@ class VoegeliMonitor:
 
     # Background thread for temperature/humidity logging (runs every 60s)
     def periodic_data_logger(self):
-        # Register interrupt for motion detection (FALLING or RISING can be used)
-        self.pir.when_motion = self.motion_detected_callback
         turn_off_ir_led = None
         while True:
             inside_temperature, inside_humidity = self.read_temperature_humidity(self.sht_inside)
