@@ -184,14 +184,6 @@ class Radar:
         self._writer_thread.start()
         self._presence_thread.start()
 
-        interrupt_handler = et.utils.ExampleInterruptHandler()
-        print("Sampling. Press Ctrl-C to stop.")
-        try:
-            while not interrupt_handler.got_signal:
-                time.sleep(0.2)
-        finally:
-            self.stop()
-
     def stop(self) -> None:
         self._stop_event.set()
         self._presence_event.set()

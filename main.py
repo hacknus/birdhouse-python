@@ -259,28 +259,41 @@ class VoegeliMonitor:
 
     # Background thread for temperature/humidity logging (runs every 60s)
     def periodic_data_logger(self):
+        logging.info("Periodic data logger started.")
         turn_off_ir_led = None
         while True:
-            inside_temperature, inside_humidity = self.read_temperature_humidity(self.sht_inside)
-            outside_temperature, outside_humidity = self.read_temperature_humidity(
-                self.sht_outside,
-                sensirion=True
-            )
-            inside_co2, inside_co2_temperature, inside_co2_humidity = self.read_co2_sensor(self.co2_sensor)
-            luminosity = self.read_luminosity_sensor(self.luminosity_sensor)
-            self.store_sensor_data(inside_temperature, inside_humidity,
-                                   outside_temperature, outside_humidity,
-                                   inside_co2, inside_co2_temperature, inside_co2_humidity,
-                                   luminosity,
-                                   motion_triggered=False)
+            try:
+                logging.debug("Reading inside temperature/humidity.")
+                inside_temperature, inside_humidity = self.read_temperature_humidity(self.sht_inside)
 
-            if turn_off_ir_led is None and get_ir_led_state():
-                # set turn-off to now + 5 minutes
-                turn_off_ir_led = time.time() + 5 * 60
-            if turn_off_ir_led is not None and turn_off_ir_led < time.time() and get_ir_led_state():
-                turn_off_ir_led = None
-                voegeli_monitor.tcp_rep_queue.put("[REP] IR LED STATE: OFF")
-                turn_ir_off()
+                logging.debug("Reading outside temperature/humidity (sensirion).")
+                outside_temperature, outside_humidity = self.read_temperature_humidity(
+                    self.sht_outside,
+                    sensirion=True
+                )
+
+                logging.debug("Reading CO2 sensor.")
+                inside_co2, inside_co2_temperature, inside_co2_humidity = self.read_co2_sensor(self.co2_sensor)
+
+                logging.debug("Reading luminosity sensor.")
+                luminosity = self.read_luminosity_sensor(self.luminosity_sensor)
+
+                logging.debug("Storing sensor data to InfluxDB.")
+                self.store_sensor_data(inside_temperature, inside_humidity,
+                                       outside_temperature, outside_humidity,
+                                       inside_co2, inside_co2_temperature, inside_co2_humidity,
+                                       luminosity,
+                                       motion_triggered=False)
+
+                if turn_off_ir_led is None and get_ir_led_state():
+                    # set turn-off to now + 5 minutes
+                    turn_off_ir_led = time.time() + 5 * 60
+                if turn_off_ir_led is not None and turn_off_ir_led < time.time() and get_ir_led_state():
+                    turn_off_ir_led = None
+                    voegeli_monitor.tcp_rep_queue.put("[REP] IR LED STATE: OFF")
+                    turn_ir_off()
+            except Exception:
+                logging.exception("Periodic data logger error.")
             time.sleep(10)
 
 
