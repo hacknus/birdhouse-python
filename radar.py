@@ -61,14 +61,14 @@ class Radar:
             sensor_id: int = 1,
             frame_rate: float = 50.0,
             sweeps_per_frame: int = 8,
-            hwaas: int = 16,
-            start_m: float = 0.2,
-            end_m: float = 1.5,
-            lowest_bpm: float = 6.0,
-            highest_bpm: float = 240.0,
-            time_series_s: float = 10.0,
-            num_distances: int = 3,
-            distance_det_s: float = 3.0,
+            hwaas: int = 32,
+            start_m: float = 0.15,
+            end_m: float = 0.6,
+            lowest_bpm: float = 60.0,
+            highest_bpm: float = 300.0,
+            time_series_s: float = 5.0,
+            num_distances: int = 1,
+            distance_det_s: float = 8.0,
             write_period_s: float = 2.0,
             env_file: str = ".env",
     ) -> None:
@@ -118,6 +118,7 @@ class Radar:
         self._writer_thread: Optional[threading.Thread] = None
         self._presence_thread: Optional[threading.Thread] = None
         self._presence_prev = False
+        self._last_debug_log_s = 0.0
 
     def run(self) -> None:
         et.utils.config_logging()
@@ -379,7 +380,7 @@ class Radar:
                 'breathing_rate': breathing_rate_bpm,
                 'breathing_rate_unit': 'bpm',
                 'presence_distance': presence_distance_m,
-                'presence_distance_unit': 'lux',
+                'presence_distance_unit': 'm',
                 'motion': presence_detected,
             }
         }
@@ -406,6 +407,19 @@ class Radar:
             if sample is not None:
                 self.store_radar_data(sample.app_state, sample.presence_detected, sample.presence_distance_m,
                                       sample.breathing_rate_bpm, sample.activity, sample.temperature)
+                if now - self._last_debug_log_s >= 10.0:
+                    self._last_debug_log_s = now
+                    logging.info(
+                        "[radar] presence=%s distance=%.3fm activity=%.3f bpm=%s state=%s",
+                        sample.presence_detected,
+                        sample.presence_distance_m,
+                        sample.activity,
+                        f"{sample.breathing_rate_bpm:.1f}" if sample.breathing_rate_bpm is not None else "None",
+                        sample.app_state,
+                    )
+            elif now - self._last_debug_log_s >= 10.0:
+                self._last_debug_log_s = now
+                logging.info("[radar] no samples yet")
             next_write += self.write_period_s
 
 
