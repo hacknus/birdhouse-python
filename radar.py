@@ -59,7 +59,7 @@ class Radar:
             ip_address: str = "localhost",
             tcp_port: int = 6110,
             sensor_id: int = 1,
-            frame_rate: float = 100.0,
+            frame_rate: float = 50.0,
             sweeps_per_frame: int = 8,
             hwaas: int = 32,
             start_m: float = 0.1,
