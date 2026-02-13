@@ -61,10 +61,10 @@ class Radar:
             sensor_id: int = 1,
             frame_rate: float = 50.0,
             sweeps_per_frame: int = 8,
-            hwaas: int = 32,
-            start_m: float = 0.1,
-            end_m: float = 0.6,
-            lowest_bpm: float = 5.0,
+            hwaas: int = 64,
+            start_m: float = 0.05,
+            end_m: float = 0.35,
+            lowest_bpm: float = 60.0,
             highest_bpm: float = 300.0,
             time_series_s: float = 5.0,
             num_distances: int = 1,
@@ -118,6 +118,18 @@ class Radar:
         self._writer_thread: Optional[threading.Thread] = None
         self._presence_thread: Optional[threading.Thread] = None
         self._presence_prev = False
+        self._last_debug_log_s = 0.0
+        self._accum_lock = threading.Lock()
+        self._accum = {
+            "count": 0,
+            "activity_sum": 0.0,
+            "temp_sum": 0.0,
+            "distance_sum": 0.0,
+            "distance_count": 0,
+            "bpm_sum": 0.0,
+            "bpm_count": 0,
+            "presence_any": False,
+        }
         self._last_debug_log_s = 0.0
 
     def run(self) -> None:
@@ -232,6 +244,18 @@ class Radar:
             )
             with self._latest_lock:
                 self._latest = sample
+            with self._accum_lock:
+                self._accum["count"] += 1
+                self._accum["activity_sum"] += activity
+                self._accum["temp_sum"] += temperature_c
+                if presence.presence_distance > 0:
+                    self._accum["distance_sum"] += presence.presence_distance
+                    self._accum["distance_count"] += 1
+                if breathing_rate is not None:
+                    self._accum["bpm_sum"] += breathing_rate
+                    self._accum["bpm_count"] += 1
+                if presence.presence_detected:
+                    self._accum["presence_any"] = True
 
     def write_device_data_to_db(self, device_data, measurement=None):
         assert self.bucket and self.org, 'Bucket and Org must be defined in .env file.'
@@ -369,13 +393,13 @@ class Radar:
     def store_radar_data(self, _state, presence_detected, presence_distance_m, breathing_rate_bpm, activity,
                          temperature):
 
-        if presence_distance_m:
+        if presence_distance_m is not None:
             presence_distance_m = float(presence_distance_m)
-        if activity:
+        if activity is not None:
             activity = float(activity)
-        if temperature:
+        if temperature is not None:
             temperature = float(temperature)
-        if breathing_rate_bpm:
+        if breathing_rate_bpm is not None:
             breathing_rate_bpm = float(breathing_rate_bpm)
 
         device_data = {
@@ -411,20 +435,49 @@ class Radar:
             if now < next_write:
                 time.sleep(min(0.05, next_write - now))
                 continue
+            with self._accum_lock:
+                accum = self._accum
+                self._accum = {
+                    "count": 0,
+                    "activity_sum": 0.0,
+                    "temp_sum": 0.0,
+                    "distance_sum": 0.0,
+                    "distance_count": 0,
+                    "bpm_sum": 0.0,
+                    "bpm_count": 0,
+                    "presence_any": False,
+                }
             with self._latest_lock:
                 sample = self._latest
-            if sample is not None:
-                self.store_radar_data(sample.app_state, sample.presence_detected, sample.presence_distance_m,
-                                      sample.breathing_rate_bpm, sample.activity, sample.temperature)
+            if accum["count"] > 0 and sample is not None:
+                avg_activity = accum["activity_sum"] / accum["count"]
+                avg_temp = accum["temp_sum"] / accum["count"]
+                avg_distance = (
+                    accum["distance_sum"] / accum["distance_count"]
+                    if accum["distance_count"] > 0
+                    else None
+                )
+                avg_bpm = (
+                    accum["bpm_sum"] / accum["bpm_count"]
+                    if accum["bpm_count"] > 0
+                    else None
+                )
+                presence_any = accum["presence_any"]
+
+                self.store_radar_data(sample.app_state, presence_any, avg_distance,
+                                      avg_bpm, avg_activity, avg_temp)
                 if now - self._last_debug_log_s >= 10.0:
                     self._last_debug_log_s = now
+                    distance_str = f"{avg_distance:.3f}m" if avg_distance is not None else "None"
+                    bpm_str = f"{avg_bpm:.1f}" if avg_bpm is not None else "None"
                     logging.info(
-                        "[radar] presence=%s distance=%.3fm activity=%.3f bpm=%s state=%s",
-                        sample.presence_detected,
-                        sample.presence_distance_m,
-                        sample.activity,
-                        f"{sample.breathing_rate_bpm:.1f}" if sample.breathing_rate_bpm is not None else "None",
+                        "[radar] presence=%s distance=%s activity=%.3f bpm=%s state=%s count=%d",
+                        presence_any,
+                        distance_str,
+                        avg_activity,
+                        bpm_str,
                         sample.app_state,
+                        accum["count"],
                     )
             elif now - self._last_debug_log_s >= 10.0:
                 self._last_debug_log_s = now
