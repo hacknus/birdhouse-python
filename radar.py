@@ -61,8 +61,8 @@ class Radar:
             sensor_id: int = 1,
             frame_rate: float = 50.0,
             sweeps_per_frame: int = 8,
-            hwaas: int = 32,
-            start_m: float = 0.05,
+            hwaas: int = 64,
+            start_m: float = 0.1,
             end_m: float = 0.35,
             lowest_bpm: float = 5.0,
             highest_bpm: float = 300.0,
@@ -107,6 +107,8 @@ class Radar:
         self.num_distances = num_distances
         self.distance_det_s = distance_det_s
         self.write_period_s = write_period_s
+        # Ignore near-field clutter and reflections right at the sensor face
+        self.min_presence_distance_m = start_m + 0.02
 
         self._client: Optional[a121.Client] = None
         self._processor: Optional[Processor] = None
@@ -142,7 +144,7 @@ class Radar:
         )
 
         presence_config = PresenceProcessorConfig(
-            intra_detection_threshold=4.0,
+            intra_detection_threshold=6.0,
             intra_frame_time_const=0.15,
             inter_frame_fast_cutoff=20.0,
             inter_frame_slow_cutoff=0.2,
@@ -217,6 +219,10 @@ class Radar:
             result = self._client.get_next()
             processor_result = self._processor.process(result)
             presence = processor_result.presence_result
+            presence_distance = presence.presence_distance
+            presence_valid = (
+                presence.presence_detected and presence_distance > self.min_presence_distance_m
+            )
 
             if presence.presence_detected and not self._presence_prev:
                 self._presence_prev = True
@@ -248,13 +254,13 @@ class Radar:
                 self._accum["count"] += 1
                 self._accum["activity_sum"] += activity
                 self._accum["temp_sum"] += temperature_c
-                if presence.presence_distance > 0:
-                    self._accum["distance_sum"] += presence.presence_distance
+                if presence_valid:
+                    self._accum["distance_sum"] += presence_distance
                     self._accum["distance_count"] += 1
                 if breathing_rate is not None:
                     self._accum["bpm_sum"] += breathing_rate
                     self._accum["bpm_count"] += 1
-                if presence.presence_detected:
+                if presence_valid:
                     self._accum["presence_any"] = True
 
     def write_device_data_to_db(self, device_data, measurement=None):
