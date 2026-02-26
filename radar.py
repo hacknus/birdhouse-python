@@ -109,8 +109,9 @@ class Radar:
         self.write_period_s = write_period_s
         # Ignore near-field clutter and clamp to the configured max range
         self.min_presence_distance_m = start_m + 0.02
-        self.max_presence_distance_m = end_m - 0.02
-        self.min_activity_for_presence = 0.8
+        self.max_presence_distance_m = end_m - 0.05
+        self.min_activity_for_presence = 1.5
+        self.min_presence_count = 3
 
         self._client: Optional[a121.Client] = None
         self._processor: Optional[Processor] = None
@@ -133,6 +134,7 @@ class Radar:
             "bpm_sum": 0.0,
             "bpm_count": 0,
             "presence_any": False,
+            "valid_count": 0,
         }
         self._last_debug_log_s = 0.0
 
@@ -146,7 +148,7 @@ class Radar:
         )
 
         presence_config = PresenceProcessorConfig(
-            intra_detection_threshold=6.0,
+            intra_detection_threshold=8.0,
             intra_frame_time_const=0.15,
             inter_frame_fast_cutoff=20.0,
             inter_frame_slow_cutoff=0.2,
@@ -261,6 +263,7 @@ class Radar:
                 if presence_valid:
                     self._accum["distance_sum"] += presence_distance
                     self._accum["distance_count"] += 1
+                    self._accum["valid_count"] += 1
                 if breathing_rate is not None:
                     self._accum["bpm_sum"] += breathing_rate
                     self._accum["bpm_count"] += 1
@@ -456,6 +459,7 @@ class Radar:
                     "bpm_sum": 0.0,
                     "bpm_count": 0,
                     "presence_any": False,
+                    "valid_count": 0,
                 }
             with self._latest_lock:
                 sample = self._latest
@@ -472,7 +476,7 @@ class Radar:
                     if accum["bpm_count"] > 0
                     else None
                 )
-                presence_any = accum["presence_any"]
+                presence_any = accum["valid_count"] >= self.min_presence_count
 
                 self.store_radar_data(sample.app_state, presence_any, avg_distance,
                                       avg_bpm, avg_activity, avg_temp)
