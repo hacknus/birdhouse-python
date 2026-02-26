@@ -64,7 +64,7 @@ class Radar:
             hwaas: int = 64,
             start_m: float = 0.1,
             end_m: float = 0.35,
-            lowest_bpm: float = 5.0,
+            lowest_bpm: float = 60.0,
             highest_bpm: float = 300.0,
             time_series_s: float = 5.0,
             num_distances: int = 1,
@@ -107,8 +107,10 @@ class Radar:
         self.num_distances = num_distances
         self.distance_det_s = distance_det_s
         self.write_period_s = write_period_s
-        # Ignore near-field clutter and reflections right at the sensor face
+        # Ignore near-field clutter and clamp to the configured max range
         self.min_presence_distance_m = start_m + 0.02
+        self.max_presence_distance_m = end_m - 0.02
+        self.min_activity_for_presence = 0.8
 
         self._client: Optional[a121.Client] = None
         self._processor: Optional[Processor] = None
@@ -220,17 +222,19 @@ class Radar:
             processor_result = self._processor.process(result)
             presence = processor_result.presence_result
             presence_distance = presence.presence_distance
+            activity = max(presence.intra_presence_score, presence.inter_presence_score)
             presence_valid = (
-                presence.presence_detected and presence_distance > self.min_presence_distance_m
+                presence.presence_detected
+                and self.min_presence_distance_m < presence_distance < self.max_presence_distance_m
+                and activity >= self.min_activity_for_presence
             )
 
-            if presence.presence_detected and not self._presence_prev:
+            if presence_valid and not self._presence_prev:
                 self._presence_prev = True
                 self._presence_event.set()
-            elif not presence.presence_detected:
+            elif not presence_valid:
                 self._presence_prev = False
 
-            activity = max(presence.intra_presence_score, presence.inter_presence_score)
             temperature_c = result.temperature
 
             breathing_rate = None
