@@ -61,14 +61,14 @@ class Radar:
             sensor_id: int = 1,
             frame_rate: float = 50.0,
             sweeps_per_frame: int = 8,
-            hwaas: int = 64,
+            hwaas: int = 16,
             start_m: float = 0.1,
             end_m: float = 0.35,
-            lowest_bpm: float = 60.0,
-            highest_bpm: float = 300.0,
-            time_series_s: float = 5.0,
-            num_distances: int = 1,
-            distance_det_s: float = 8.0,
+            lowest_bpm: float = 6.0,
+            highest_bpm: float = 240.0,
+            time_series_s: float = 10.0,
+            num_distances: int = 3,
+            distance_det_s: float = 3.0,
             write_period_s: float = 2.0,
             env_file: str = ".env",
     ) -> None:
@@ -107,11 +107,9 @@ class Radar:
         self.num_distances = num_distances
         self.distance_det_s = distance_det_s
         self.write_period_s = write_period_s
-        # Ignore near-field clutter and clamp to the configured max range
-        self.min_presence_distance_m = start_m + 0.02
-        self.max_presence_distance_m = end_m - 0.05
-        self.min_activity_for_presence = 1.5
-        self.min_presence_count = 3
+        # Only consider presence within the configured range
+        self.min_presence_distance_m = start_m
+        self.max_presence_distance_m = end_m
 
         self._client: Optional[a121.Client] = None
         self._processor: Optional[Processor] = None
@@ -134,9 +132,7 @@ class Radar:
             "bpm_sum": 0.0,
             "bpm_count": 0,
             "presence_any": False,
-            "valid_count": 0,
         }
-        self._last_debug_log_s = 0.0
 
     def run(self) -> None:
         et.utils.config_logging()
@@ -148,7 +144,7 @@ class Radar:
         )
 
         presence_config = PresenceProcessorConfig(
-            intra_detection_threshold=8.0,
+            intra_detection_threshold=4.0,
             intra_frame_time_const=0.15,
             inter_frame_fast_cutoff=20.0,
             inter_frame_slow_cutoff=0.2,
@@ -225,11 +221,8 @@ class Radar:
             presence = processor_result.presence_result
             presence_distance = presence.presence_distance
             activity = max(presence.intra_presence_score, presence.inter_presence_score)
-            presence_valid = (
-                presence.presence_detected
-                and self.min_presence_distance_m < presence_distance < self.max_presence_distance_m
-                and activity >= self.min_activity_for_presence
-            )
+            distance_ok = self.min_presence_distance_m < presence_distance < self.max_presence_distance_m
+            presence_valid = presence.presence_detected and distance_ok
 
             if presence_valid and not self._presence_prev:
                 self._presence_prev = True
@@ -263,7 +256,6 @@ class Radar:
                 if presence_valid:
                     self._accum["distance_sum"] += presence_distance
                     self._accum["distance_count"] += 1
-                    self._accum["valid_count"] += 1
                 if breathing_rate is not None:
                     self._accum["bpm_sum"] += breathing_rate
                     self._accum["bpm_count"] += 1
@@ -459,7 +451,6 @@ class Radar:
                     "bpm_sum": 0.0,
                     "bpm_count": 0,
                     "presence_any": False,
-                    "valid_count": 0,
                 }
             with self._latest_lock:
                 sample = self._latest
@@ -476,7 +467,7 @@ class Radar:
                     if accum["bpm_count"] > 0
                     else None
                 )
-                presence_any = accum["valid_count"] >= self.min_presence_count
+                presence_any = accum["presence_any"]
 
                 self.store_radar_data(sample.app_state, presence_any, avg_distance,
                                       avg_bpm, avg_activity, avg_temp)
