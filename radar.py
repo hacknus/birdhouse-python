@@ -59,16 +59,16 @@ class Radar:
             ip_address: str = "localhost",
             tcp_port: int = 6110,
             sensor_id: int = 1,
-            frame_rate: float = 50.0,
-            sweeps_per_frame: int = 8,
-            hwaas: int = 16,
-            start_m: float = 0.1,
-            end_m: float = 0.35,
-            lowest_bpm: float = 6.0,
-            highest_bpm: float = 240.0,
-            time_series_s: float = 10.0,
-            num_distances: int = 3,
-            distance_det_s: float = 3.0,
+            frame_rate: float = 30.0,
+            sweeps_per_frame: int = 16,
+            hwaas: int = 32,
+            start_m: float = 0.12,
+            end_m: float = 0.33,
+            lowest_bpm: float = 40.0,
+            highest_bpm: float = 300.0,
+            time_series_s: float = 8.0,
+            num_distances: int = 1,
+            distance_det_s: float = 6.0,
             write_period_s: float = 2.0,
             env_file: str = ".env",
     ) -> None:
@@ -144,7 +144,7 @@ class Radar:
         )
 
         presence_config = PresenceProcessorConfig(
-            intra_detection_threshold=4.0,
+            intra_detection_threshold=6.0,
             intra_frame_time_const=0.15,
             inter_frame_fast_cutoff=20.0,
             inter_frame_slow_cutoff=0.2,
@@ -235,6 +235,8 @@ class Radar:
             breathing_rate = None
             if processor_result.breathing_result is not None:
                 breathing_rate = processor_result.breathing_result.breathing_rate
+            if not presence_valid:
+                breathing_rate = None
 
             sample = Sample(
                 timestamp_s=time.time(),
