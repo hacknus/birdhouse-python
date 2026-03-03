@@ -94,11 +94,13 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
                             time.sleep(0.25)
                             continue
                     if response:
+                        logging.info("[TCP] Sending response to %s: %s", self.client_address, str(response).strip())
                         if hasattr(self.server, 'full_encryption') and self.server.full_encryption:
                             self.send(response)
                         else:
                             self.request.sendall(response.encode('utf-8'))
                     else:
+                        logging.info("[TCP] Sending timeout error to %s", self.client_address)
                         if hasattr(self.server, 'full_encryption') and self.server.full_encryption:
                             self.send("[ERR] command not acknowledged\n")
                         else:
@@ -153,6 +155,12 @@ def send_periodic_data_to_all_clients(tcp_rep_queue: queue.Queue, env_file: Path
                 time.sleep(0.25)
                 continue
         try:
+            if message:
+                logging.info(
+                    "[TCP] Broadcasting message to %d client(s): %s",
+                    len(ThreadedTCPRequestHandler.connected_clients),
+                    str(message).strip(),
+                )
             for client in ThreadedTCPRequestHandler.connected_clients:
                 # note that full encryption takes more time and is not necessary since the data itself is
                 # not private

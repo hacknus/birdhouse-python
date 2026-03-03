@@ -133,10 +133,9 @@ class Radar:
             "bpm_count": 0,
             "presence_any": False,
         }
+        self._reconnect_delay_s = 2.0
 
-    def run(self) -> None:
-        et.utils.config_logging()
-
+    def _create_sensor_config(self) -> tuple[a121.SensorConfig, ProcessorConfig]:
         breathing_config = BreathingProcessorConfig(
             lowest_breathing_rate=self.lowest_bpm,
             highest_breathing_rate=self.highest_bpm,
@@ -173,18 +172,38 @@ class Radar:
         )
         processor_config.breathing_config = ref_app_config.breathing_config
         processor_config.presence_config = ref_app_config.presence_config
+        return sensor_config, processor_config
 
+    def _connect_radar(self) -> None:
+        sensor_config, processor_config = self._create_sensor_config()
         self._client = a121.Client.open(ip_address=self.ip_address, tcp_port=self.tcp_port)
-        metadata = self._client.setup_session(
-            a121.SessionConfig({self.sensor_id: sensor_config})
-        )
+        metadata = self._client.setup_session(a121.SessionConfig({self.sensor_id: sensor_config}))
         assert not isinstance(metadata, list)
-
         self._processor = Processor(
             sensor_config=sensor_config, processor_config=processor_config, metadata=metadata
         )
-
         self._client.start_session()
+
+    def _disconnect_radar(self) -> None:
+        if self._client is not None:
+            try:
+                self._client.stop_session()
+            except Exception:
+                pass
+            try:
+                self._client.close()
+            except Exception:
+                pass
+        self._client = None
+        self._processor = None
+
+    def run(self) -> None:
+        et.utils.config_logging()
+        try:
+            self._connect_radar()
+        except Exception as e:
+            logging.warning("[radar] initial connect failed, retrying in sampler: %s", e)
+            self._disconnect_radar()
 
         self._sampler_thread = threading.Thread(
             target=self._sampler, name="sampler", daemon=True
@@ -208,16 +227,31 @@ class Radar:
             self._writer_thread.join(timeout=2.0)
         if self._presence_thread is not None:
             self._presence_thread.join(timeout=2.0)
-        if self._client is not None:
-            self._client.stop_session()
-            self._client.close()
+        self._disconnect_radar()
 
     def _sampler(self) -> None:
-        assert self._client is not None
-        assert self._processor is not None
         while not self._stop_event.is_set():
-            result = self._client.get_next()
-            processor_result = self._processor.process(result)
+            if self._client is None or self._processor is None:
+                try:
+                    self._connect_radar()
+                    logging.info("[radar] reconnected")
+                except Exception as e:
+                    logging.warning("[radar] reconnect failed: %s", e)
+                    self._disconnect_radar()
+                    if self._stop_event.wait(self._reconnect_delay_s):
+                        break
+                    continue
+
+            try:
+                result = self._client.get_next()
+                processor_result = self._processor.process(result)
+            except Exception as e:
+                logging.warning("[radar] sampler error, reconnecting: %s", e)
+                self._disconnect_radar()
+                if self._stop_event.wait(self._reconnect_delay_s):
+                    break
+                continue
+
             presence = processor_result.presence_result
             presence_distance = presence.presence_distance
             activity = max(presence.intra_presence_score, presence.inter_presence_score)
@@ -226,6 +260,11 @@ class Radar:
 
             if presence_valid and not self._presence_prev:
                 self._presence_prev = True
+                logging.info(
+                    "[radar] motion detected at distance=%.3fm activity=%.3f",
+                    presence_distance,
+                    activity,
+                )
                 self._presence_event.set()
             elif not presence_valid:
                 self._presence_prev = False
@@ -339,53 +378,65 @@ class Radar:
 
             turn_ir_off()
 
-        # Send an email only if at least a day has passed
+        # Send an email only if at least a day has passed since last successful send
         file_path = "last_email_sent.txt"
+        last_email_time = 0
 
-        # Read the existing timestamp or initialize it
+        # Read existing timestamp
         try:
-            with open(file_path, "r+") as f:
+            with open(file_path, "r") as f:
                 content = f.readline().strip()
-                last_email_time = int(content) if content else 0  # Convert to int, default to 0 if empty
-                if current_time - last_email_time >= 86400:
-                    try:
-                        csv_file = 'newsletter_subscribers.csv'
-                        with open(csv_file, mode='r') as file:
-                            reader = csv.reader(file)
-                            subscribers = list(reader)
-                            for subscriber in subscribers:
-                                email = subscriber[0]
-                                encoded_email = encode_email(email)
+                last_email_time = int(content) if content else 0
+        except (FileNotFoundError, ValueError):
+            last_email_time = 0
 
-                                base_url = "https://linusleo.synology.me"
-                                unsubscribe_link = f"{base_url}/unsubscribe/{encoded_email}/"
-                                email_body = (
-                                    "Hoi Du!<br>"
-                                    "I just came back and entered my birdhouse!<br>"
-                                    f"Check me out at {base_url}<br>"
-                                    "Best Regards, Your Vögeli<br><br>"
-                                    f'<a href="{unsubscribe_link}">Unsubscribe</a>'
-                                )
+        if current_time - last_email_time >= 86400:
+            sent_count = 0
+            try:
+                csv_file = 'newsletter_subscribers.csv'
+                with open(csv_file, mode='r') as file:
+                    reader = csv.reader(file)
+                    subscribers = list(reader)
+                    for subscriber in subscribers:
+                        if not subscriber:
+                            continue
+                        email = subscriber[0].strip()
+                        if not email:
+                            continue
 
-                                self.email_reporter.send_mail(
-                                    email_body,
-                                    subject="Vögeli Motion Alert",
-                                    recipients=email,
-                                    is_html=True,
-                                )
-                    except FileNotFoundError:
-                        pass  # File does not exist yet, no subscribers
-                    # Overwrite with the new timestamp
-                    f.seek(0)  # Move to the beginning of the file
-                    new_timestamp = int(current_time)
-                    f.write(str(new_timestamp))
-                    f.truncate()  # Remove any leftover content after the new write
-        except FileNotFoundError:
-            # If the file doesn't exist, create it and write the timestamp
-            with open(file_path, "w") as f:
-                new_timestamp = int(current_time)
-                last_email_time = 0
-                f.write(str(new_timestamp))
+                        encoded_email = encode_email(email)
+                        base_url = "https://linusleo.synology.me"
+                        unsubscribe_link = f"{base_url}/unsubscribe/{encoded_email}/"
+                        email_body = (
+                            "Hoi Du!<br>"
+                            "I just came back and entered my birdhouse!<br>"
+                            f"Check me out at {base_url}<br>"
+                            "Best Regards, Your Vögeli<br><br>"
+                            f'<a href="{unsubscribe_link}">Unsubscribe</a>'
+                        )
+
+                        try:
+                            self.email_reporter.send_mail(
+                                email_body,
+                                subject="Vögeli Motion Alert",
+                                recipients=email,
+                                is_html=True,
+                            )
+                            sent_count += 1
+                        except Exception:
+                            logging.exception("Failed to send motion email to %s.", email)
+            except FileNotFoundError:
+                logging.info("No newsletter_subscribers.csv found, skipping motion email.")
+
+            if sent_count > 0:
+                with open(file_path, "w") as f:
+                    f.write(str(int(current_time)))
+                logging.info("Sent %d motion notification email(s).", sent_count)
+            else:
+                logging.info("No motion emails sent; last_email_sent not updated.")
+        else:
+            remaining = int(86400 - (current_time - last_email_time))
+            logging.info("Motion email throttled for %ds.", max(0, remaining))
 
         print("Motion detected! Data stored.")
 
@@ -395,7 +446,10 @@ class Radar:
             if self._stop_event.is_set():
                 break
             self._presence_event.clear()
-            self.motion_detected_callback()
+            try:
+                self.motion_detected_callback()
+            except Exception:
+                logging.exception("Unhandled exception in motion_detected_callback.")
 
     def store_radar_data(self, _state, presence_detected, presence_distance_m, breathing_rate_bpm, activity,
                          temperature):
@@ -473,22 +527,6 @@ class Radar:
 
                 self.store_radar_data(sample.app_state, presence_any, avg_distance,
                                       avg_bpm, avg_activity, avg_temp)
-                if now - self._last_debug_log_s >= 10.0:
-                    self._last_debug_log_s = now
-                    distance_str = f"{avg_distance:.3f}m" if avg_distance is not None else "None"
-                    bpm_str = f"{avg_bpm:.1f}" if avg_bpm is not None else "None"
-                    logging.info(
-                        "[radar] presence=%s distance=%s activity=%.3f bpm=%s state=%s count=%d",
-                        presence_any,
-                        distance_str,
-                        avg_activity,
-                        bpm_str,
-                        sample.app_state,
-                        accum["count"],
-                    )
-            elif now - self._last_debug_log_s >= 10.0:
-                self._last_debug_log_s = now
-                logging.info("[radar] no samples yet")
             next_write += self.write_period_s
 
 

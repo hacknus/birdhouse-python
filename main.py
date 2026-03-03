@@ -42,6 +42,8 @@ import joblib
 
 
 class VoegeliMonitor:
+    _TSL2561_CLIP_THRESHOLD = (4900, 37000, 65000)
+
     def __init__(self, env_file: Path = Path('./.env')):
 
         self.task_is_running = True
@@ -120,6 +122,14 @@ class VoegeliMonitor:
         except Exception:
             pass
 
+    def send_tcp_ack(self, message: str):
+        self.tcp_cmd_ack_queue.put(message)
+        logging.info("[TCP] Sent ACK: %s", message.strip())
+
+    def send_tcp_rep(self, message: str):
+        self.tcp_rep_queue.put(message)
+        logging.info("[TCP] Sent REP: %s", message.strip())
+
     # Function to read temperature and humidity
     def read_temperature_humidity(self, sensor, sensirion=False):
         if sensirion:
@@ -134,12 +144,58 @@ class VoegeliMonitor:
         else:
             return None, None, None
 
+    def _read_tsl2561_raw_channels(self, tsl2561):
+        broadband = getattr(tsl2561, "broadband", None)
+        infrared = getattr(tsl2561, "infrared", None)
+        if broadband is not None and infrared is not None:
+            return int(broadband), int(infrared)
+
+        luminosity = getattr(tsl2561, "luminosity", None)
+        if isinstance(luminosity, (tuple, list)) and len(luminosity) >= 2:
+            return int(luminosity[0]), int(luminosity[1])
+
+        return None, None
+
     def read_luminosity_sensor(self, tsl2561):
-        luminosity = tsl2561.lux
+        try:
+            luminosity = tsl2561.lux
+        except Exception:
+            logging.warning("TSL2561 read failed.", exc_info=True)
+            return None, None, None
+
+        broadband, infrared = self._read_tsl2561_raw_channels(tsl2561)
+
         if luminosity is not None:
-            return round(luminosity, 2)
-        else:
-            return None
+            return round(luminosity, 2), broadband, infrared
+
+        if broadband is None or infrared is None:
+            return None, None, None
+
+        # Mirrors driver behavior: ch0==0 means too dark to compute lux.
+        if broadband == 0:
+            return 0.0, 0, 0
+
+        try:
+            integration_time = int(getattr(tsl2561, "integration_time", 2))
+        except Exception:
+            integration_time = 2
+        if integration_time < 0 or integration_time >= len(self._TSL2561_CLIP_THRESHOLD):
+            integration_time = 2
+        clip_threshold = self._TSL2561_CLIP_THRESHOLD[integration_time]
+
+        # Mirrors driver behavior: clipped channels are saturated.
+        if broadband > clip_threshold or infrared > clip_threshold:
+            logging.debug(
+                "TSL2561 saturated (broadband=%s infrared=%s threshold=%s integration_time=%s).",
+                broadband,
+                infrared,
+                clip_threshold,
+                integration_time,
+            )
+            return None, None, None
+
+        # Defensive fallback for edge cases where lux is still not computable.
+        return 0.0, 0, 0
 
     def query_database_last(self, data_since='1m', bucket='COCoNuT', field='heating_set_temperature', unit="Kelvin"):
         """Query a database field during the specified time period."""
@@ -193,7 +249,7 @@ class VoegeliMonitor:
     # Function to store sensor data in the database
     def store_sensor_data(self, inside_temperature, inside_humidity, outside_temperature, outside_humidity, inside_co2,
                           inside_co2_temperature, inside_co2_humidity,
-                          luminosity,
+                          luminosity, broadband, infrared,
                           motion_triggered):
 
         if luminosity is None:
@@ -241,7 +297,8 @@ class VoegeliMonitor:
                 'inside_co2_humidity_f_unit': '%',
                 'luminosity': luminosity,
                 'luminosity_unit': 'lux',
-
+                'broadband_luminosity': broadband,
+                'IR_luminosity': infrared,
                 'probability': probability,
             }
         }
@@ -256,11 +313,11 @@ class VoegeliMonitor:
                 OSError) as e:
             logging.warning(f"Database connection error, skipping this update: {e}")
 
-
     # Background thread for temperature/humidity logging (runs every 60s)
     def periodic_data_logger(self):
         logging.info("Periodic data logger started.")
         turn_off_ir_led = None
+        prev_ir_led_state = get_ir_led_state()
         while True:
             try:
                 logging.debug("Reading inside temperature/humidity.")
@@ -276,22 +333,33 @@ class VoegeliMonitor:
                 inside_co2, inside_co2_temperature, inside_co2_humidity = self.read_co2_sensor(self.co2_sensor)
 
                 logging.debug("Reading luminosity sensor.")
-                luminosity = self.read_luminosity_sensor(self.luminosity_sensor)
+                lux, broadband, infrared = self.read_luminosity_sensor(self.luminosity_sensor)
 
                 logging.debug("Storing sensor data to InfluxDB.")
                 self.store_sensor_data(inside_temperature, inside_humidity,
                                        outside_temperature, outside_humidity,
                                        inside_co2, inside_co2_temperature, inside_co2_humidity,
-                                       luminosity,
+                                       lux,
+                                       broadband,
+                                       infrared,
                                        motion_triggered=False)
 
-                if turn_off_ir_led is None and get_ir_led_state():
-                    # set turn-off to now + 5 minutes
+                ir_led_state = get_ir_led_state()
+
+                # Start a fresh auto-off timer on each OFF->ON transition.
+                if ir_led_state and not prev_ir_led_state:
                     turn_off_ir_led = time.time() + 5 * 60
-                if turn_off_ir_led is not None and turn_off_ir_led < time.time() and get_ir_led_state():
+
+                # Clear stale deadline when LED is already OFF.
+                if not ir_led_state:
                     turn_off_ir_led = None
-                    voegeli_monitor.tcp_rep_queue.put("[REP] IR LED STATE: OFF")
+
+                if turn_off_ir_led is not None and turn_off_ir_led < time.time() and ir_led_state:
+                    turn_off_ir_led = None
+                    self.send_tcp_rep("[REP] IR LED STATE: OFF")
                     turn_ir_off()
+
+                prev_ir_led_state = ir_led_state
             except Exception:
                 logging.exception("Periodic data logger error.")
             time.sleep(10)
@@ -317,13 +385,13 @@ if __name__ == "__main__":
             cmd_string = cmd
             if "[CMD] IR ON" in cmd_string:
                 turn_ir_on()
-                voegeli_monitor.tcp_cmd_ack_queue.put("[ACK] IR ON executed")
+                voegeli_monitor.send_tcp_ack("[ACK] IR ON executed")
             elif "[CMD] IR OFF" in cmd_string:
                 turn_ir_off()
-                voegeli_monitor.tcp_cmd_ack_queue.put("[ACK] IR OFF executed")
+                voegeli_monitor.send_tcp_ack("[ACK] IR OFF executed")
             elif "[CMD] GET IR STATE" in cmd_string:
                 ir_state = get_ir_led_state()
-                voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] IR STATE is {'ON' if ir_state else 'OFF'}")
+                voegeli_monitor.send_tcp_ack(f"[ACK] IR STATE is {'ON' if ir_state else 'OFF'}")
             elif "[CMD] add newsletter=" in cmd_string:
                 email = cmd_string.split(b'=')[1].strip()
                 csv_file = 'newsletter_subscribers.csv'
@@ -343,9 +411,9 @@ if __name__ == "__main__":
                     with open(csv_file, mode='a', newline='') as file:
                         writer = csv.writer(file)
                         writer.writerow([email.decode()])
-                    voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Email {email.decode()} added to newsletter")
+                    voegeli_monitor.send_tcp_ack(f"[ACK] Email {email.decode()} added to newsletter")
                 else:
-                    voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Email {email.decode()} already in newsletter")
+                    voegeli_monitor.send_tcp_ack(f"[ACK] Email {email.decode()} already in newsletter")
             elif "[CMD] remove newsletter=" in cmd_string:
                 email = cmd_string.split(b'=')[1].strip()
                 csv_file = 'newsletter_subscribers.csv'
@@ -362,9 +430,9 @@ if __name__ == "__main__":
                         writer = csv.writer(file)
                         for em in emails:
                             writer.writerow([em])
-                    voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Email {email.decode()} removed from newsletter")
+                    voegeli_monitor.send_tcp_ack(f"[ACK] Email {email.decode()} removed from newsletter")
                 except FileNotFoundError:
-                    voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Newsletter file not found")
+                    voegeli_monitor.send_tcp_ack(f"[ACK] Newsletter file not found")
             elif "[CMD] save image" in cmd_string:
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 image_path = os.path.join("gallery", f"{timestamp}.jpg")
@@ -379,19 +447,19 @@ if __name__ == "__main__":
                         "-y",
                         image_path
                     ], check=True, capture_output=True, text=True)
-                    voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Image saved to {image_path}")
+                    voegeli_monitor.send_tcp_ack(f"[ACK] Image saved to {image_path}")
                     upload_image(image_path=image_path, token=voegeli_monitor.upload_image_token,
                                  url=voegeli_monitor.upload_image_url)
                     os.remove(image_path)
                 except subprocess.CalledProcessError as e:
                     logging.error(f"Failed to save image: {e.stderr}")
-                    voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] Failed to save image: MediaMTX server error")
+                    voegeli_monitor.send_tcp_ack(f"[ACK] Failed to save image: MediaMTX server error")
         except queue.Empty:
             pass
 
         if old_ir_led_state != get_ir_led_state():
             logging.info(f"IR LED state changed to {'ON' if get_ir_led_state() else 'OFF'}")
-            voegeli_monitor.tcp_rep_queue.put("[REP] IR LED STATE: " + ('ON' if get_ir_led_state() else 'OFF'))
+            voegeli_monitor.send_tcp_rep("[REP] IR LED STATE: " + ('ON' if get_ir_led_state() else 'OFF'))
             old_ir_led_state = get_ir_led_state()
 
         # if old_ir_filter_state != get_ir_filter_state():
