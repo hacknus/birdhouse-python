@@ -381,7 +381,7 @@ if __name__ == "__main__":
         try:
             cmd = voegeli_monitor.tcp_cmd_queue.get(timeout=0.1)
             logging.debug(f"[TCP] revived: {cmd}")
-            cmd_string = cmd
+            cmd_string = cmd.decode("utf-8", errors="replace") if isinstance(cmd, bytes) else str(cmd)
             if "[CMD] IR ON" in cmd_string:
                 turn_ir_on()
                 voegeli_monitor.send_tcp_ack("[ACK] IR ON executed")
@@ -392,7 +392,7 @@ if __name__ == "__main__":
                 ir_state = get_ir_led_state()
                 voegeli_monitor.send_tcp_ack(f"[ACK] IR STATE is {'ON' if ir_state else 'OFF'}")
             elif "[CMD] add newsletter=" in cmd_string:
-                email = cmd_string.split(b'=')[1].strip()
+                email = cmd_string.split('=', 1)[1].strip()
                 csv_file = 'newsletter_subscribers.csv'
                 # Check if the email is already in the file
                 email_exists = False
@@ -400,7 +400,7 @@ if __name__ == "__main__":
                     with open(csv_file, mode='r') as file:
                         reader = csv.reader(file)
                         for row in reader:
-                            if row and row[0].encode() == email:
+                            if row and row[0] == email:
                                 email_exists = True
                                 break
                 except FileNotFoundError:
@@ -409,12 +409,12 @@ if __name__ == "__main__":
                 if not email_exists:
                     with open(csv_file, mode='a', newline='') as file:
                         writer = csv.writer(file)
-                        writer.writerow([email.decode()])
-                    voegeli_monitor.send_tcp_ack(f"[ACK] Email {email.decode()} added to newsletter")
+                        writer.writerow([email])
+                    voegeli_monitor.send_tcp_ack(f"[ACK] Email {email} added to newsletter")
                 else:
-                    voegeli_monitor.send_tcp_ack(f"[ACK] Email {email.decode()} already in newsletter")
+                    voegeli_monitor.send_tcp_ack(f"[ACK] Email {email} already in newsletter")
             elif "[CMD] remove newsletter=" in cmd_string:
-                email = cmd_string.split(b'=')[1].strip()
+                email = cmd_string.split('=', 1)[1].strip()
                 csv_file = 'newsletter_subscribers.csv'
                 # Read all emails and filter out the one to remove
                 emails = []
@@ -422,14 +422,14 @@ if __name__ == "__main__":
                     with open(csv_file, mode='r') as file:
                         reader = csv.reader(file)
                         for row in reader:
-                            if row and row[0].encode() != email:
+                            if row and row[0] != email:
                                 emails.append(row[0])
                     # Write back the filtered list
                     with open(csv_file, mode='w', newline='') as file:
                         writer = csv.writer(file)
                         for em in emails:
                             writer.writerow([em])
-                    voegeli_monitor.send_tcp_ack(f"[ACK] Email {email.decode()} removed from newsletter")
+                    voegeli_monitor.send_tcp_ack(f"[ACK] Email {email} removed from newsletter")
                 except FileNotFoundError:
                     voegeli_monitor.send_tcp_ack(f"[ACK] Newsletter file not found")
             elif "[CMD] save image" in cmd_string:
