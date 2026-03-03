@@ -320,10 +320,7 @@ class VoegeliMonitor:
         prev_ir_led_state = get_ir_led_state()
         while True:
             try:
-                logging.debug("Reading inside temperature/humidity.")
                 inside_temperature, inside_humidity = self.read_temperature_humidity(self.sht_inside)
-
-                logging.debug("Reading outside temperature/humidity (sensirion).")
                 outside_temperature, outside_humidity = self.read_temperature_humidity(
                     self.sht_outside,
                     sensirion=True
@@ -372,6 +369,8 @@ if __name__ == "__main__":
                         format='%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s',
                         datefmt='%H:%M:%S',
                         level=logging.DEBUG)
+    logging.getLogger("sensirion_i2c_driver").setLevel(logging.INFO)
+    logging.getLogger("sensirion_i2c_driver.connection").setLevel(logging.INFO)
 
     voegeli_monitor = VoegeliMonitor()
 
