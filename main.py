@@ -122,8 +122,12 @@ class VoegeliMonitor:
         except Exception:
             pass
 
-    def send_tcp_ack(self, message: str):
-        self.tcp_cmd_ack_queue.put(message)
+    def send_tcp_ack(self, message: str, response_queue: queue.Queue | None = None):
+        if response_queue is not None:
+            response_queue.put(message)
+        else:
+            # Backward-compatible fallback path.
+            self.tcp_cmd_ack_queue.put(message)
         logging.info("[TCP] Sent ACK: %s", message.strip())
 
     def send_tcp_rep(self, message: str):
@@ -379,18 +383,28 @@ if __name__ == "__main__":
 
     while True:
         try:
-            cmd = voegeli_monitor.tcp_cmd_queue.get(timeout=0.1)
+            cmd_packet = voegeli_monitor.tcp_cmd_queue.get(timeout=0.1)
+            response_queue = None
+            if isinstance(cmd_packet, tuple) and len(cmd_packet) == 2 and hasattr(cmd_packet[1], "put"):
+                cmd = cmd_packet[0]
+                response_queue = cmd_packet[1]
+            else:
+                cmd = cmd_packet
             logging.debug(f"[TCP] revived: {cmd}")
             cmd_string = cmd.decode("utf-8", errors="replace") if isinstance(cmd, bytes) else str(cmd)
+
+            def send_ack(message: str):
+                voegeli_monitor.send_tcp_ack(message, response_queue=response_queue)
+
             if "[CMD] IR ON" in cmd_string:
                 turn_ir_on()
-                voegeli_monitor.send_tcp_ack("[ACK] IR ON executed")
+                send_ack("[ACK] IR ON executed")
             elif "[CMD] IR OFF" in cmd_string:
                 turn_ir_off()
-                voegeli_monitor.send_tcp_ack("[ACK] IR OFF executed")
+                send_ack("[ACK] IR OFF executed")
             elif "[CMD] GET IR STATE" in cmd_string:
                 ir_state = get_ir_led_state()
-                voegeli_monitor.send_tcp_ack(f"[ACK] IR STATE is {'ON' if ir_state else 'OFF'}")
+                send_ack(f"[ACK] IR STATE is {'ON' if ir_state else 'OFF'}")
             elif "[CMD] add newsletter=" in cmd_string:
                 email = cmd_string.split('=', 1)[1].strip()
                 csv_file = 'newsletter_subscribers.csv'
@@ -410,9 +424,9 @@ if __name__ == "__main__":
                     with open(csv_file, mode='a', newline='') as file:
                         writer = csv.writer(file)
                         writer.writerow([email])
-                    voegeli_monitor.send_tcp_ack(f"[ACK] Email {email} added to newsletter")
+                    send_ack(f"[ACK] Email {email} added to newsletter")
                 else:
-                    voegeli_monitor.send_tcp_ack(f"[ACK] Email {email} already in newsletter")
+                    send_ack(f"[ACK] Email {email} already in newsletter")
             elif "[CMD] remove newsletter=" in cmd_string:
                 email = cmd_string.split('=', 1)[1].strip()
                 csv_file = 'newsletter_subscribers.csv'
@@ -429,9 +443,9 @@ if __name__ == "__main__":
                         writer = csv.writer(file)
                         for em in emails:
                             writer.writerow([em])
-                    voegeli_monitor.send_tcp_ack(f"[ACK] Email {email} removed from newsletter")
+                    send_ack(f"[ACK] Email {email} removed from newsletter")
                 except FileNotFoundError:
-                    voegeli_monitor.send_tcp_ack(f"[ACK] Newsletter file not found")
+                    send_ack(f"[ACK] Newsletter file not found")
             elif "[CMD] save image" in cmd_string:
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 image_path = os.path.join("gallery", f"{timestamp}.jpg")
@@ -446,13 +460,13 @@ if __name__ == "__main__":
                         "-y",
                         image_path
                     ], check=True, capture_output=True, text=True)
-                    voegeli_monitor.send_tcp_ack(f"[ACK] Image saved to {image_path}")
+                    send_ack(f"[ACK] Image saved to {image_path}")
                     upload_image(image_path=image_path, token=voegeli_monitor.upload_image_token,
                                  url=voegeli_monitor.upload_image_url)
                     os.remove(image_path)
                 except subprocess.CalledProcessError as e:
                     logging.error(f"Failed to save image: {e.stderr}")
-                    voegeli_monitor.send_tcp_ack(f"[ACK] Failed to save image: MediaMTX server error")
+                    send_ack(f"[ACK] Failed to save image: MediaMTX server error")
         except queue.Empty:
             pass
 

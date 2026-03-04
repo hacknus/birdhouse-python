@@ -70,6 +70,7 @@ class Radar:
             num_distances: int = 1,
             distance_det_s: float = 6.0,
             write_period_s: float = 2.0,
+            motion_activity_threshold: float = 6.0,
             env_file: str = ".env",
     ) -> None:
         # Track last image save time and last email sent time
@@ -107,6 +108,7 @@ class Radar:
         self.num_distances = num_distances
         self.distance_det_s = distance_det_s
         self.write_period_s = write_period_s
+        self.motion_activity_threshold = motion_activity_threshold
         # Only consider presence within the configured range
         self.min_presence_distance_m = start_m
         self.max_presence_distance_m = end_m
@@ -120,7 +122,7 @@ class Radar:
         self._sampler_thread: Optional[threading.Thread] = None
         self._writer_thread: Optional[threading.Thread] = None
         self._presence_thread: Optional[threading.Thread] = None
-        self._presence_prev = False
+        self._motion_active_prev: Optional[bool] = None
         self._last_debug_log_s = 0.0
         self._accum_lock = threading.Lock()
         self._accum = {
@@ -196,6 +198,7 @@ class Radar:
                 pass
         self._client = None
         self._processor = None
+        self._motion_active_prev = None
 
     def run(self) -> None:
         et.utils.config_logging()
@@ -257,17 +260,17 @@ class Radar:
             activity = max(presence.intra_presence_score, presence.inter_presence_score)
             distance_ok = self.min_presence_distance_m < presence_distance < self.max_presence_distance_m
             presence_valid = presence.presence_detected and distance_ok
+            motion_active = presence_valid and activity >= self.motion_activity_threshold
 
-            if presence_valid and not self._presence_prev:
-                self._presence_prev = True
+            # Trigger only on rising edge (low->high). Do not trigger on startup if already high.
+            if self._motion_active_prev is not None and motion_active and not self._motion_active_prev:
                 logging.info(
-                    "[radar] motion detected at distance=%.3fm activity=%.3f",
+                    "[radar] motion rising edge detected at distance=%.3fm activity=%.3f",
                     presence_distance,
                     activity,
                 )
                 self._presence_event.set()
-            elif not presence_valid:
-                self._presence_prev = False
+            self._motion_active_prev = motion_active
 
             temperature_c = result.temperature
 

@@ -78,7 +78,9 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
 
                 if (hasattr(self.server, 'run_tasks') and hasattr(self.server, 'tcp_cmd_queue')
                         and hasattr(self.server, 'tcp_cmd_ack_queue')):
-                    self.server.tcp_cmd_queue.put(data)
+                    # Route each command to its own response queue to avoid stale/cross-client ACK mixups.
+                    response_queue = queue.Queue(maxsize=1)
+                    self.server.tcp_cmd_queue.put((data, response_queue))
 
                     # note: we cannot use queue.get(timeout=timeout) because this would let this task stuck even when the 
                     # main task is killed
@@ -88,7 +90,7 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
                         if time.time() - start > 10.0:
                             break
                         try:
-                            response = self.server.tcp_cmd_ack_queue.get(block=False)
+                            response = response_queue.get(block=False)
                             break
                         except queue.Empty:
                             time.sleep(0.25)
