@@ -8,6 +8,6 @@ numpy
 gpiozero
 adafruit-circuitpython-sht4x
 opencv-python
-influxdb-client
+psycopg[binary]
 python-dotenv
 pycryptodo

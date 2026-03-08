@@ -27,16 +27,12 @@ from acconeer.exptool.a121.algo.breathing._ref_app import (
 )
 from acconeer.exptool.a121.algo.presence import ProcessorConfig as PresenceProcessorConfig
 from dotenv import dotenv_values
-from urllib3.exceptions import HTTPError
-import requests.exceptions
-import influxdb_client.rest
-
-import influxdb_client
-from influxdb_client.client.write_api import SYNCHRONOUS
+import psycopg
 
 from camera import get_ir_led_state, turn_ir_on, turn_ir_off
 from ignore_motion import are_we_still_blocked
 from image_upload import upload_image
+from postgresql_store import PostgresTimeSeriesStore
 
 
 @dataclass
@@ -78,21 +74,13 @@ class Radar:
 
         env_values = dotenv_values(env_file)
         self.mediamtx_url = env_values['IMAGE_GRAB_URL']
-        self.bucket = env_values['INFLUXDB_BUCKET']
-        self.org = env_values['INFLUXDB_ORG']
-        self.token = env_values['INFLUXDB_TOKEN']
-        self.url = env_values['INFLUXDB_URL']
+        self.db_store = PostgresTimeSeriesStore(env_values)
+        self.bucket = self.db_store.bucket
         self.upload_image_token = env_values['UPLOAD_IMAGE_TOKEN']
         self.upload_image_url = env_values['UPLOAD_IMAGE_URL']
 
-        assert self.org and self.token and self.url and self.bucket, 'URL, Token, Org and Bucket must be defined in .env file'
-        self.client = influxdb_client.InfluxDBClient(url=self.url, token=self.token, org=self.org, verify_ssl=False)
-
         # replace this with custom email-interface
         self.email_reporter = Reporter("Voegeli")
-
-        self.write_api = self.client.write_api(write_options=SYNCHRONOUS)
-        self.query_api = self.client.query_api()
 
         self.ip_address = ip_address
         self.tcp_port = tcp_port
@@ -231,6 +219,7 @@ class Radar:
         if self._presence_thread is not None:
             self._presence_thread.join(timeout=2.0)
         self._disconnect_radar()
+        self.db_store.close()
 
     def _sampler(self) -> None:
         while not self._stop_event.is_set():
@@ -307,35 +296,7 @@ class Radar:
                     self._accum["presence_any"] = True
 
     def write_device_data_to_db(self, device_data, measurement=None):
-        assert self.bucket and self.org, 'Bucket and Org must be defined in .env file.'
-        measurement_names = []
-
-        if measurement is None:
-            measurement = device_data['device']
-
-        for key in device_data['data'].keys():
-            if "unit" not in key and "location" not in key:
-                measurement_names.append(str(key))
-        points = []
-        for mn in measurement_names:
-            field = mn
-            value = device_data['data'][mn]
-            if value is not None:
-                p = influxdb_client.Point(measurement).field(field, value)
-                if f'{mn}_unit' in device_data['data'].keys():
-                    unit = device_data['data'][f'{mn}_unit']
-                    if unit is not None:
-                        p.tag('unit', unit)
-                if f'{mn}_location' in device_data['data'].keys():
-                    location = device_data['data'][f'{mn}_location']
-                    if location is not None:
-                        p.tag('location', location)
-                if f'{mn}_type' in device_data['data'].keys():
-                    type_tag = device_data['data'][f'{mn}_type']
-                    if type_tag is not None:
-                        p.tag('type', type_tag)
-                points.append(p)
-        self.write_api.write(bucket=self.bucket, org=self.org, record=points)
+        self.db_store.write_device_data(device_data, measurement=measurement)
 
         # Function to store sensor data in the database
 
@@ -484,12 +445,7 @@ class Radar:
 
         try:
             self.write_device_data_to_db(device_data)
-        except (HTTPError,
-                requests.exceptions.ConnectionError,
-                requests.exceptions.ConnectTimeout,
-                influxdb_client.rest.ApiException,
-                ConnectionError,
-                OSError) as e:
+        except (psycopg.Error, ConnectionError, OSError) as e:
             logging.warning(f"Database connection error, skipping this update: {e}")
 
     def _writer(self) -> None:

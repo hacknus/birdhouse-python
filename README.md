@@ -28,6 +28,18 @@ First, set up [birdhouse-rs](https://github.com/hacknus/birdhouse-rs) on a serve
 Then set up netbird on both the raspberry pi and the server.
 
 Enter all tokens and URLs in the `.env` file.
+For database access, configure either `POSTGRES_DSN` or:
+
+- `POSTGRES_HOST`
+- `POSTGRES_PORT`
+- `POSTGRES_DB`
+- `POSTGRES_USER`
+- `POSTGRES_PASSWORD`
+
+Optional:
+
+- `POSTGRES_TABLE` (defaults to `influx_points`)
+- `POSTGRES_BUCKET` (defaults to `voegeli` or falls back to `INFLUXDB_BUCKET` if still present)
 
 Install the requirements:
 

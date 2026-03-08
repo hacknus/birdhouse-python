@@ -23,19 +23,14 @@ from system_monitor import SystemMonitoring
 from camera import turn_ir_on, turn_ir_off, get_ir_led_state
 
 from dotenv import dotenv_values
+import psycopg
 
 import urllib3
 
 from tcp_server import run_server
+from postgresql_store import PostgresTimeSeriesStore
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-from urllib3.exceptions import HTTPError
-import requests.exceptions
-import influxdb_client.rest
-
-import influxdb_client
-from influxdb_client.client.write_api import SYNCHRONOUS
 
 import numpy as np
 import joblib
@@ -53,18 +48,10 @@ class VoegeliMonitor:
 
         env_values = dotenv_values(env_file)
         self.mediamtx_url = env_values['IMAGE_GRAB_URL']
-        self.bucket = env_values['INFLUXDB_BUCKET']
-        self.org = env_values['INFLUXDB_ORG']
-        self.token = env_values['INFLUXDB_TOKEN']
-        self.url = env_values['INFLUXDB_URL']
+        self.db_store = PostgresTimeSeriesStore(env_values)
+        self.bucket = self.db_store.bucket
         self.upload_image_token = env_values['UPLOAD_IMAGE_TOKEN']
         self.upload_image_url = env_values['UPLOAD_IMAGE_URL']
-
-        assert self.org and self.token and self.url and self.bucket, 'URL, Token, Org and Bucket must be defined in .env file'
-        self.client = influxdb_client.InfluxDBClient(url=self.url, token=self.token, org=self.org, verify_ssl=False)
-
-        self.write_api = self.client.write_api(write_options=SYNCHRONOUS)
-        self.query_api = self.client.query_api()
 
         # I2C sensor setup
         i2c = board.I2C()
@@ -121,6 +108,7 @@ class VoegeliMonitor:
             self.sht4x_outside_transceiver.close()
         except Exception:
             pass
+        self.db_store.close()
 
     def send_tcp_ack(self, message: str, response_queue: queue.Queue | None = None):
         if response_queue is not None:
@@ -201,54 +189,17 @@ class VoegeliMonitor:
         # Defensive fallback for edge cases where lux is still not computable.
         return 0.0, 0, 0
 
-    def query_database_last(self, data_since='1m', bucket='COCoNuT', field='heating_set_temperature', unit="Kelvin"):
+    def query_database_last(self, data_since='1m', bucket=None, field='heating_set_temperature', unit="Kelvin"):
         """Query a database field during the specified time period."""
-
-        query = f'from(bucket: "{bucket}")\
-        |> range(start: -{data_since})\
-        |> filter(fn: (r) => r["_field"] == "{field}")\
-        |> filter(fn: (r) => r["unit"] == "{unit}")\
-        |> last()'
-
-        result = self.query_api.query(query=query)
-
-        temperatures = []
-        for table in result:
-            for record in table.records:
-                temperatures.append(record.values['_value'])
-
-        return temperatures[-1]
+        return self.db_store.query_last(
+            data_since=data_since,
+            bucket=bucket,
+            field=field,
+            unit=unit,
+        )
 
     def write_device_data_to_db(self, device_data, measurement=None):
-        assert self.bucket and self.org, 'Bucket and Org must be defined in .env file.'
-        measurement_names = []
-
-        if measurement is None:
-            measurement = device_data['device']
-
-        for key in device_data['data'].keys():
-            if "unit" not in key and "location" not in key:
-                measurement_names.append(str(key))
-        points = []
-        for mn in measurement_names:
-            field = mn
-            value = device_data['data'][mn]
-            if value is not None:
-                p = influxdb_client.Point(measurement).field(field, value)
-                if f'{mn}_unit' in device_data['data'].keys():
-                    unit = device_data['data'][f'{mn}_unit']
-                    if unit is not None:
-                        p.tag('unit', unit)
-                if f'{mn}_location' in device_data['data'].keys():
-                    location = device_data['data'][f'{mn}_location']
-                    if location is not None:
-                        p.tag('location', location)
-                if f'{mn}_type' in device_data['data'].keys():
-                    type_tag = device_data['data'][f'{mn}_type']
-                    if type_tag is not None:
-                        p.tag('type', type_tag)
-                points.append(p)
-        self.write_api.write(bucket=self.bucket, org=self.org, record=points)
+        self.db_store.write_device_data(device_data, measurement=measurement)
 
     # Function to store sensor data in the database
     def store_sensor_data(self, inside_temperature, inside_humidity, outside_temperature, outside_humidity, inside_co2,
@@ -309,12 +260,7 @@ class VoegeliMonitor:
 
         try:
             self.write_device_data_to_db(device_data)
-        except (HTTPError,
-                requests.exceptions.ConnectionError,
-                requests.exceptions.ConnectTimeout,
-                influxdb_client.rest.ApiException,
-                ConnectionError,
-                OSError) as e:
+        except (psycopg.Error, ConnectionError, OSError) as e:
             logging.warning(f"Database connection error, skipping this update: {e}")
 
     # Background thread for temperature/humidity logging (runs every 60s)
@@ -336,7 +282,7 @@ class VoegeliMonitor:
                 logging.debug("Reading luminosity sensor.")
                 lux, broadband, infrared = self.read_luminosity_sensor(self.luminosity_sensor)
 
-                logging.debug("Storing sensor data to InfluxDB.")
+                logging.debug("Storing sensor data to PostgreSQL.")
                 self.store_sensor_data(inside_temperature, inside_humidity,
                                        outside_temperature, outside_humidity,
                                        inside_co2, inside_co2_temperature, inside_co2_humidity,
