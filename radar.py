@@ -111,6 +111,7 @@ class Radar:
         self._writer_thread: Optional[threading.Thread] = None
         self._presence_thread: Optional[threading.Thread] = None
         self._motion_active_prev: Optional[bool] = None
+        self._motion_low_since_s: Optional[float] = None
         self._last_debug_log_s = 0.0
         self._accum_lock = threading.Lock()
         self._accum = {
@@ -187,6 +188,7 @@ class Radar:
         self._client = None
         self._processor = None
         self._motion_active_prev = None
+        self._motion_low_since_s = None
 
     def run(self) -> None:
         et.utils.config_logging()
@@ -250,15 +252,31 @@ class Radar:
             distance_ok = self.min_presence_distance_m < presence_distance < self.max_presence_distance_m
             presence_valid = presence.presence_detected and distance_ok
             motion_active = presence_valid and activity >= self.motion_activity_threshold
+            now_s = time.time()
 
-            # Trigger only on rising edge (low->high). Do not trigger on startup if already high.
-            if self._motion_active_prev is not None and motion_active and not self._motion_active_prev:
-                logging.info(
-                    "[radar] motion rising edge detected at distance=%.3fm activity=%.3f",
-                    presence_distance,
-                    activity,
-                )
-                self._presence_event.set()
+            # Trigger only on rising edge (low->high) after a full 60s of low motion.
+            if motion_active:
+                if self._motion_active_prev is not None and not self._motion_active_prev:
+                    low_duration_s = (
+                        now_s - self._motion_low_since_s
+                        if self._motion_low_since_s is not None
+                        else 0.0
+                    )
+                    if self._motion_low_since_s is not None and low_duration_s >= 60.0:
+                        logging.info(
+                            "[radar] motion rising edge detected at distance=%.3fm activity=%.3f",
+                            presence_distance,
+                            activity,
+                        )
+                        self._presence_event.set()
+                    else:
+                        logging.info(
+                            "[radar] rising edge ignored; low motion duration %.1fs < 60.0s",
+                            low_duration_s,
+                        )
+                self._motion_low_since_s = None
+            elif self._motion_low_since_s is None:
+                self._motion_low_since_s = now_s
             self._motion_active_prev = motion_active
 
             temperature_c = result.temperature
@@ -314,8 +332,26 @@ class Radar:
 
         # Save an image only if at least an hour has passed
         if current_time - self.last_image_time >= 3600:
-            turn_ir_on()
-            time.sleep(3)
+            ir_enabled_for_capture = False
+            latest_lux = None
+            try:
+                latest_lux = self.db_store.query_last(
+                    data_since="5m",
+                    field="luminosity",
+                    unit="lux",
+                )
+            except Exception:
+                logging.exception("Failed to read latest luminosity for IR gating.")
+
+            if isinstance(latest_lux, (int, float)) and latest_lux > 200:
+                logging.info(
+                    "Skipping IR for automated picture: luminosity %.2f lux > 200 lux.",
+                    float(latest_lux),
+                )
+            else:
+                turn_ir_on()
+                ir_enabled_for_capture = True
+                time.sleep(3)
 
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             image_path = os.path.join("gallery", f"{timestamp}.jpg")
@@ -340,9 +376,11 @@ class Radar:
                 logging.error(f"Failed to capture image: {e.stderr}")
                 print(f"Failed to capture image from MediaMTX server: {e}")
 
-            turn_ir_off()
+            if ir_enabled_for_capture:
+                turn_ir_off()
 
-        # Send an email only if at least a day has passed since last successful send
+        # Send an email only if at least 23 hours have passed since last successful send
+        email_throttle_seconds = 23 * 60 * 60
         file_path = "last_email_sent.txt"
         last_email_time = 0
 
@@ -354,7 +392,7 @@ class Radar:
         except (FileNotFoundError, ValueError):
             last_email_time = 0
 
-        if current_time - last_email_time >= 86400:
+        if current_time - last_email_time >= email_throttle_seconds:
             sent_count = 0
             try:
                 csv_file = 'newsletter_subscribers.csv'
@@ -399,7 +437,7 @@ class Radar:
             else:
                 logging.info("No motion emails sent; last_email_sent not updated.")
         else:
-            remaining = int(86400 - (current_time - last_email_time))
+            remaining = int(email_throttle_seconds - (current_time - last_email_time))
             logging.info("Motion email throttled for %ds.", max(0, remaining))
 
         print("Motion detected! Data stored.")
