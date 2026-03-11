@@ -254,8 +254,10 @@ class Radar:
             motion_active = presence_valid and activity >= self.motion_activity_threshold
             now_s = time.time()
 
-            # Trigger only on rising edge (low->high), and only if presence was low for a full 60s.
-            if self._motion_active_prev is not None and motion_active and not self._motion_active_prev:
+            # Trigger only on rising edge of presence (low->high),
+            # and only if presence was low for a full 60s.
+            presence_active = presence_valid
+            if self._motion_active_prev is not None and presence_active and not self._motion_active_prev:
                 low_duration_s = (
                     now_s - self._motion_low_since_s
                     if self._motion_low_since_s is not None
@@ -274,11 +276,11 @@ class Radar:
                         low_duration_s,
                     )
 
-            if presence_valid:
+            if presence_active:
                 self._motion_low_since_s = None
             elif self._motion_low_since_s is None:
                 self._motion_low_since_s = now_s
-            self._motion_active_prev = motion_active
+            self._motion_active_prev = presence_active
 
             temperature_c = result.temperature
 
