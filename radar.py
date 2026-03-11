@@ -254,26 +254,27 @@ class Radar:
             motion_active = presence_valid and activity >= self.motion_activity_threshold
             now_s = time.time()
 
-            # Trigger only on rising edge (low->high) after a full 60s of low motion.
-            if motion_active:
-                if self._motion_active_prev is not None and not self._motion_active_prev:
-                    low_duration_s = (
-                        now_s - self._motion_low_since_s
-                        if self._motion_low_since_s is not None
-                        else 0.0
+            # Trigger only on rising edge (low->high), and only if presence was low for a full 60s.
+            if self._motion_active_prev is not None and motion_active and not self._motion_active_prev:
+                low_duration_s = (
+                    now_s - self._motion_low_since_s
+                    if self._motion_low_since_s is not None
+                    else 0.0
+                )
+                if self._motion_low_since_s is not None and low_duration_s >= 60.0:
+                    logging.info(
+                        "[radar] motion rising edge detected at distance=%.3fm activity=%.3f",
+                        presence_distance,
+                        activity,
                     )
-                    if self._motion_low_since_s is not None and low_duration_s >= 60.0:
-                        logging.info(
-                            "[radar] motion rising edge detected at distance=%.3fm activity=%.3f",
-                            presence_distance,
-                            activity,
-                        )
-                        self._presence_event.set()
-                    else:
-                        logging.info(
-                            "[radar] rising edge ignored; low motion duration %.1fs < 60.0s",
-                            low_duration_s,
-                        )
+                    self._presence_event.set()
+                else:
+                    logging.info(
+                        "[radar] rising edge ignored; presence-low duration %.1fs < 60.0s",
+                        low_duration_s,
+                    )
+
+            if presence_valid:
                 self._motion_low_since_s = None
             elif self._motion_low_since_s is None:
                 self._motion_low_since_s = now_s
