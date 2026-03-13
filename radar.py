@@ -33,6 +33,7 @@ from camera import get_ir_led_state, turn_ir_on, turn_ir_off
 from ignore_motion import are_we_still_blocked
 from image_upload import upload_image
 from postgresql_store import PostgresTimeSeriesStore
+from time_utils import bern_image_timestamp
 
 
 @dataclass
@@ -356,7 +357,7 @@ class Radar:
                 ir_enabled_for_capture = True
                 time.sleep(3)
 
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = bern_image_timestamp()
             image_path = os.path.join("gallery", f"{timestamp}.jpg")
 
             try:

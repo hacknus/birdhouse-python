@@ -19,6 +19,7 @@ import threading
 
 from image_upload import upload_image
 from radar import Radar
+from time_utils import bern_image_timestamp
 from system_monitor import SystemMonitoring
 from camera import turn_ir_on, turn_ir_off, get_ir_led_state
 
@@ -393,7 +394,7 @@ if __name__ == "__main__":
                 except FileNotFoundError:
                     send_ack(f"[ACK] Newsletter file not found")
             elif "[CMD] save image" in cmd_string:
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                timestamp = bern_image_timestamp()
                 image_path = os.path.join("gallery", f"{timestamp}.jpg")
                 try:
 
