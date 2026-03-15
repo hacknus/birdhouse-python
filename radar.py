@@ -334,55 +334,6 @@ class Radar:
 
         current_time = time.time()
 
-        # Save an image only if at least an hour has passed
-        if current_time - self.last_image_time >= 3600:
-            ir_enabled_for_capture = False
-            latest_lux = None
-            try:
-                latest_lux = self.db_store.query_last(
-                    data_since="5m",
-                    field="luminosity",
-                    unit="lux",
-                )
-            except Exception:
-                logging.exception("Failed to read latest luminosity for IR gating.")
-
-            if isinstance(latest_lux, (int, float)) and latest_lux > 2000:
-                logging.info(
-                    "Skipping IR for automated picture: luminosity %.2f lux > 2000 lux.",
-                    float(latest_lux),
-                )
-            else:
-                turn_ir_on()
-                ir_enabled_for_capture = True
-                time.sleep(3)
-
-            timestamp = bern_image_timestamp()
-            image_path = os.path.join("gallery", f"{timestamp}.jpg")
-
-            try:
-
-                subprocess.run([
-                    "ffmpeg",
-                    "-rtsp_transport", "tcp",
-                    "-i", self.mediamtx_url,
-                    "-frames:v", "1",
-                    "-q:v", "2",
-                    "-y",
-                    image_path
-                ], check=True, capture_output=True, text=True)
-
-                self.last_image_time = current_time
-                upload_image(image_path=image_path, token=self.upload_image_token,
-                             url=self.upload_image_url)
-                os.remove(image_path)
-            except subprocess.CalledProcessError as e:
-                logging.error(f"Failed to capture image: {e.stderr}")
-                print(f"Failed to capture image from MediaMTX server: {e}")
-
-            if ir_enabled_for_capture:
-                turn_ir_off()
-
         # Send an email only if at least 23 hours have passed since last successful send
         email_throttle_seconds = 23 * 60 * 60
         file_path = "last_email_sent.txt"
@@ -443,6 +394,55 @@ class Radar:
         else:
             remaining = int(email_throttle_seconds - (current_time - last_email_time))
             logging.info("Motion email throttled for %ds.", max(0, remaining))
+
+        # Save an image only if at least an hour has passed
+        if current_time - self.last_image_time >= 3600:
+            ir_enabled_for_capture = False
+            latest_lux = None
+            try:
+                latest_lux = self.db_store.query_last(
+                    data_since="5m",
+                    field="luminosity",
+                    unit="lux",
+                )
+            except Exception:
+                logging.exception("Failed to read latest luminosity for IR gating.")
+
+            if isinstance(latest_lux, (int, float)) and latest_lux > 2000:
+                logging.info(
+                    "Skipping IR for automated picture: luminosity %.2f lux > 2000 lux.",
+                    float(latest_lux),
+                )
+            else:
+                turn_ir_on()
+                ir_enabled_for_capture = True
+                time.sleep(3)
+
+            timestamp = bern_image_timestamp()
+            image_path = os.path.join("gallery", f"{timestamp}.jpg")
+
+            try:
+
+                subprocess.run([
+                    "ffmpeg",
+                    "-rtsp_transport", "tcp",
+                    "-i", self.mediamtx_url,
+                    "-frames:v", "1",
+                    "-q:v", "2",
+                    "-y",
+                    image_path
+                ], check=True, capture_output=True, text=True)
+
+                self.last_image_time = current_time
+                upload_image(image_path=image_path, token=self.upload_image_token,
+                             url=self.upload_image_url)
+                os.remove(image_path)
+            except subprocess.CalledProcessError as e:
+                logging.error(f"Failed to capture image: {e.stderr}")
+                print(f"Failed to capture image from MediaMTX server: {e}")
+
+            if ir_enabled_for_capture:
+                turn_ir_off()
 
         print("Motion detected! Data stored.")
 
