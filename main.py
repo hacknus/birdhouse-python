@@ -354,13 +354,13 @@ if __name__ == "__main__":
                 send_ack(f"[ACK] IR STATE is {'ON' if ir_state else 'OFF'}")
             elif "[CMD] IR FILTER ON" in cmd_string:
                 turn_ir_filter_on()
-                voegeli_monitor.tcp_cmd_ack_queue.put("[ACK] IR FILTER ON executed")
+                send_ack("[ACK] IR FILTER ON executed")
             elif "[CMD] IR FILTER OFF" in cmd_string:
                 turn_ir_filter_off()
-                voegeli_monitor.tcp_cmd_ack_queue.put("[ACK] IR FILTER OFF executed")
+                send_ack("[ACK] IR FILTER OFF executed")
             elif "[CMD] GET IR FILTER STATE" in cmd_string:
                 ir_filter_state = get_ir_filter_state()
-                voegeli_monitor.tcp_cmd_ack_queue.put(f"[ACK] IR FILTER STATE is {'ON' if ir_filter_state else 'OFF'}")
+                send_ack(f"[ACK] IR FILTER STATE is {'ON' if ir_filter_state else 'OFF'}")
 
             elif "[CMD] add newsletter=" in cmd_string:
                 email = cmd_string.split('=', 1)[1].strip()
