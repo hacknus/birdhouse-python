@@ -15,7 +15,7 @@ _FFMPEG_DECODE_ERROR_MARKERS = (
 )
 
 
-def capture_still_image(stream_url: str, image_path: str | os.PathLike[str], *, retries: int = 3) -> Path:
+def capture_still_image(stream_url: str, image_path: str | os.PathLike[str], *, retries: int = 2) -> Path:
     """Capture a still image from the RTSP stream, retrying on decode corruption."""
     output_path = Path(image_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -34,18 +34,26 @@ def capture_still_image(stream_url: str, image_path: str | os.PathLike[str], *, 
             stream_url,
             "-vf",
             r"select=eq(pict_type\,I)",
-            "-vsync",
-            "vfr",
+            "-fps_mode",
+            "passthrough",
             "-frames:v",
             "1",
             "-q:v",
             "2",
+            "-update",
+            "1",
             "-y",
             str(output_path),
         ]
 
         try:
-            result = subprocess.run(command, check=True, capture_output=True, text=True)
+            result = subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=4,
+            )
         except subprocess.CalledProcessError as exc:
             last_error = exc
             logging.warning(
@@ -54,6 +62,19 @@ def capture_still_image(stream_url: str, image_path: str | os.PathLike[str], *, 
                 retries,
                 exc.stderr.strip() or exc,
             )
+            continue
+        except subprocess.TimeoutExpired as exc:
+            last_error = exc
+            logging.warning(
+                "Still image capture timed out on attempt %d/%d after %.1fs.",
+                attempt,
+                retries,
+                float(exc.timeout) if exc.timeout is not None else 0.0,
+            )
+            try:
+                output_path.unlink(missing_ok=True)
+            except OSError:
+                logging.warning("Failed to remove timed out capture at %s", output_path, exc_info=True)
             continue
 
         stderr = result.stderr.lower()
