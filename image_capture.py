@@ -1,7 +1,6 @@
 import os
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 
 
@@ -9,9 +8,9 @@ def capture_still_image(
     stream_url: str,
     image_path: str | os.PathLike[str],
     *,
-    warmup_seconds: float = 4.0,
+    warmup_seconds: int = 5,
     capture_fps: int = 1,
-    timeout_seconds: float = 7.0,
+    timeout_seconds: int = 8,
 ) -> Path:
     """
     Grab a still image by sampling the RTSP stream for a few seconds and keeping the latest frame.
@@ -33,6 +32,8 @@ def capture_still_image(
             "tcp",
             "-i",
             stream_url,
+            "-t",
+            str(warmup_seconds),
             "-vf",
             f"fps={capture_fps}",
             "-q:v",
@@ -40,48 +41,20 @@ def capture_still_image(
             "-y",
             frame_pattern,
         ]
-        process = subprocess.Popen(
+
+        result = subprocess.run(
             command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            check=True,
+            capture_output=True,
             text=True,
+            timeout=timeout_seconds,
         )
 
-        deadline = time.monotonic() + timeout_seconds
-        selected_frame: Path | None = None
+        frames = sorted(Path(temp_dir).glob("frame-*.jpg"))
+        if not frames:
+            stderr = result.stderr.strip()
+            raise RuntimeError(stderr or "ffmpeg did not produce any snapshot frames")
 
-        try:
-            while time.monotonic() < deadline:
-                frames = sorted(Path(temp_dir).glob("frame-*.jpg"))
-                if frames and time.monotonic() >= deadline - max(1.0, timeout_seconds - warmup_seconds):
-                    selected_frame = frames[-1]
-                    break
-
-                if process.poll() is not None:
-                    break
-                time.sleep(0.2)
-
-            if selected_frame is None:
-                frames = sorted(Path(temp_dir).glob("frame-*.jpg"))
-                if frames:
-                    selected_frame = frames[-1]
-
-            if selected_frame is None:
-                stderr = ""
-                if process.stderr is not None:
-                    try:
-                        stderr = process.stderr.read().strip()
-                    except Exception:
-                        stderr = ""
-                raise RuntimeError(stderr or "ffmpeg did not produce any snapshot frames")
-
-            selected_frame.replace(output_path)
-            return output_path
-        finally:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=1.0)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=1.0)
+        latest_frame = frames[-1]
+        latest_frame.replace(output_path)
+        return output_path
