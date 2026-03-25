@@ -15,9 +15,8 @@ _reader = None
 
 
 class StreamSnapshotReader:
-    def __init__(self, stream_url: str, *, fps: int = 1, reconnect_delay_s: float = 1.0) -> None:
+    def __init__(self, stream_url: str, *, reconnect_delay_s: float = 1.0) -> None:
         self.stream_url = stream_url
-        self.fps = fps
         self.reconnect_delay_s = reconnect_delay_s
 
         self._latest_frame: bytes | None = None
@@ -89,13 +88,15 @@ class StreamSnapshotReader:
                     "-hide_banner",
                     "-loglevel",
                     "warning",
+                    "-threads",
+                    "1",
                     "-rtsp_transport",
                     "tcp",
+                    "-skip_frame",
+                    "nokey",
                     "-i",
                     self.stream_url,
                     "-an",
-                    "-vf",
-                    f"fps={self.fps}",
                     "-f",
                     "image2pipe",
                     "-vcodec",
