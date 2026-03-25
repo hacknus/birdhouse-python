@@ -17,7 +17,7 @@ import os
 import threading
 
 from image_upload import upload_image
-from image_capture import capture_still_image, ensure_stream_snapshot_reader, stop_stream_snapshot_reader
+from image_capture import capture_still_image
 from radar import Radar
 from time_utils import bern_image_timestamp
 from system_monitor import SystemMonitoring
@@ -53,7 +53,6 @@ class VoegeliMonitor:
         self.bucket = self.db_store.bucket
         self.upload_image_token = env_values['UPLOAD_IMAGE_TOKEN']
         self.upload_image_url = env_values['UPLOAD_IMAGE_URL']
-        ensure_stream_snapshot_reader(self.mediamtx_url)
 
         # I2C sensor setup
         i2c = board.I2C()
@@ -110,7 +109,6 @@ class VoegeliMonitor:
             self.sht4x_outside_transceiver.close()
         except Exception:
             pass
-        stop_stream_snapshot_reader()
         self.db_store.close()
 
     def send_tcp_ack(self, message: str, response_queue: queue.Queue | None = None):
