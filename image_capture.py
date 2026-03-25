@@ -42,8 +42,9 @@ def capture_still_image(
         ]
         process = subprocess.Popen(
             command,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
 
         deadline = time.monotonic() + timeout_seconds
@@ -66,7 +67,13 @@ def capture_still_image(
                     selected_frame = frames[-1]
 
             if selected_frame is None:
-                raise RuntimeError("ffmpeg did not produce any snapshot frames")
+                stderr = ""
+                if process.stderr is not None:
+                    try:
+                        stderr = process.stderr.read().strip()
+                    except Exception:
+                        stderr = ""
+                raise RuntimeError(stderr or "ffmpeg did not produce any snapshot frames")
 
             selected_frame.replace(output_path)
             return output_path
