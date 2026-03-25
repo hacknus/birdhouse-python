@@ -9,8 +9,9 @@ def capture_still_image(
     stream_url: str,
     image_path: str | os.PathLike[str],
     *,
-    warmup_seconds: float = 5.0,
-    timeout_seconds: float = 9.0,
+    warmup_seconds: float = 4.0,
+    capture_fps: int = 1,
+    timeout_seconds: float = 7.0,
 ) -> Path:
     """
     Grab a still image by sampling the RTSP stream for a few seconds and keeping the latest frame.
@@ -32,6 +33,8 @@ def capture_still_image(
             "tcp",
             "-i",
             stream_url,
+            "-vf",
+            f"fps={capture_fps}",
             "-q:v",
             "2",
             "-y",
@@ -43,14 +46,13 @@ def capture_still_image(
             stderr=subprocess.DEVNULL,
         )
 
-        capture_deadline = time.monotonic() + warmup_seconds
-        hard_deadline = time.monotonic() + timeout_seconds
+        deadline = time.monotonic() + timeout_seconds
         selected_frame: Path | None = None
 
         try:
-            while time.monotonic() < hard_deadline:
+            while time.monotonic() < deadline:
                 frames = sorted(Path(temp_dir).glob("frame-*.jpg"))
-                if frames and time.monotonic() >= capture_deadline:
+                if frames and time.monotonic() >= deadline - max(1.0, timeout_seconds - warmup_seconds):
                     selected_frame = frames[-1]
                     break
 
