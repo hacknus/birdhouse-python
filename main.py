@@ -1,5 +1,4 @@
 import queue
-import subprocess
 from pathlib import Path
 import logging
 
@@ -18,6 +17,7 @@ import os
 import threading
 
 from image_upload import upload_image
+from image_capture import capture_still_image
 from radar import Radar
 from time_utils import bern_image_timestamp
 from system_monitor import SystemMonitoring
@@ -407,22 +407,13 @@ if __name__ == "__main__":
                 timestamp = bern_image_timestamp()
                 image_path = os.path.join("gallery", f"{timestamp}.jpg")
                 try:
-
-                    subprocess.run([
-                        "ffmpeg",
-                        "-rtsp_transport", "tcp",
-                        "-i", voegeli_monitor.mediamtx_url,
-                        "-frames:v", "1",
-                        "-q:v", "2",
-                        "-y",
-                        image_path
-                    ], check=True, capture_output=True, text=True)
+                    capture_still_image(voegeli_monitor.mediamtx_url, image_path)
                     send_ack(f"[ACK] Image saved to {image_path}")
                     upload_image(image_path=image_path, token=voegeli_monitor.upload_image_token,
                                  url=voegeli_monitor.upload_image_url)
                     os.remove(image_path)
-                except subprocess.CalledProcessError as e:
-                    logging.error(f"Failed to save image: {e.stderr}")
+                except Exception as e:
+                    logging.error("Failed to save image: %s", e, exc_info=True)
                     send_ack(f"[ACK] Failed to save image: MediaMTX server error")
         except queue.Empty:
             pass
