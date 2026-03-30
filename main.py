@@ -123,6 +123,24 @@ class VoegeliMonitor:
         self.tcp_rep_queue.put(message)
         logging.info("[TCP] Sent REP: %s", message.strip())
 
+    def save_and_upload_live_image(self, timestamp: str):
+        live_photo = save_live_photo_bundle(
+            rtsp_url=self.mediamtx_url,
+            timestamp=timestamp,
+            output_dir="gallery",
+        )
+        try:
+            upload_live_photo(
+                live_photo_result=live_photo,
+                token=self.upload_image_token,
+                url=self.upload_image_url,
+            )
+        finally:
+            if live_photo.still_path is not None:
+                live_photo.still_path.unlink(missing_ok=True)
+            if live_photo.motion_path is not None:
+                live_photo.motion_path.unlink(missing_ok=True)
+
     # Function to read temperature and humidity
     def read_temperature_humidity(self, sensor, sensirion=False):
         if sensirion:
@@ -405,25 +423,20 @@ if __name__ == "__main__":
                     send_ack(f"[ACK] Newsletter file not found")
             elif "[CMD] save image" in cmd_string:
                 timestamp = bern_image_timestamp()
-                try:
-                    live_photo = save_live_photo_bundle(
-                        rtsp_url=voegeli_monitor.mediamtx_url,
-                        timestamp=timestamp,
-                        output_dir="gallery",
-                    )
-                    send_ack(f"[ACK] Live image saved to {live_photo.still_path}")
-                    upload_live_photo(
-                        live_photo_result=live_photo,
-                        token=voegeli_monitor.upload_image_token,
-                        url=voegeli_monitor.upload_image_url,
-                    )
-                    if live_photo.still_path is not None:
-                        live_photo.still_path.unlink(missing_ok=True)
-                    if live_photo.motion_path is not None:
-                        live_photo.motion_path.unlink(missing_ok=True)
-                except subprocess.CalledProcessError as e:
-                    logging.error(f"Failed to save image: {e.stderr}")
-                    send_ack(f"[ACK] Failed to save image: MediaMTX server error")
+                send_ack(f"[ACK] Live image capture started for {timestamp}")
+
+                def _background_save_image():
+                    try:
+                        voegeli_monitor.save_and_upload_live_image(timestamp)
+                        voegeli_monitor.send_tcp_rep(f"[REP] Live image saved for {timestamp}")
+                    except subprocess.CalledProcessError as e:
+                        logging.error(f"Failed to save image: {e.stderr}")
+                        voegeli_monitor.send_tcp_rep("[REP] Failed to save image: MediaMTX server error")
+                    except Exception:
+                        logging.exception("Failed to save and upload live image.")
+                        voegeli_monitor.send_tcp_rep("[REP] Failed to save image: unexpected error")
+
+                threading.Thread(target=_background_save_image, daemon=True).start()
         except queue.Empty:
             pass
 
