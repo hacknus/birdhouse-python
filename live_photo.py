@@ -22,7 +22,7 @@ def save_live_photo_bundle(
     rtsp_url: str,
     timestamp: str,
     output_dir: str = "gallery/live_photos",
-    duration_seconds: float = 2.5,
+    duration_seconds: float = 5.0,
 ) -> LivePhotoResult:
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
