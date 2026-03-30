@@ -11,8 +11,6 @@ import datetime
 from typing import Optional
 import logging
 import csv
-import os
-
 import subprocess
 from unibe_mail import Reporter
 from encoding import encode_email
@@ -31,7 +29,8 @@ import psycopg
 
 from camera import get_ir_led_state, turn_ir_on, turn_ir_off
 from ignore_motion import are_we_still_blocked
-from image_upload import upload_image
+from image_upload import upload_live_photo
+from live_photo import save_live_photo_bundle
 from postgresql_store import PostgresTimeSeriesStore
 from time_utils import bern_image_timestamp
 
@@ -419,24 +418,23 @@ class Radar:
                 time.sleep(3)
 
             timestamp = bern_image_timestamp()
-            image_path = os.path.join("gallery", f"{timestamp}.jpg")
 
             try:
-
-                subprocess.run([
-                    "ffmpeg",
-                    "-rtsp_transport", "tcp",
-                    "-i", self.mediamtx_url,
-                    "-frames:v", "1",
-                    "-q:v", "2",
-                    "-y",
-                    image_path
-                ], check=True, capture_output=True, text=True)
-
+                live_photo = save_live_photo_bundle(
+                    rtsp_url=self.mediamtx_url,
+                    timestamp=timestamp,
+                    output_dir="gallery",
+                )
                 self.last_image_time = current_time
-                upload_image(image_path=image_path, token=self.upload_image_token,
-                             url=self.upload_image_url)
-                os.remove(image_path)
+                upload_live_photo(
+                    live_photo_result=live_photo,
+                    token=self.upload_image_token,
+                    url=self.upload_image_url,
+                )
+                if live_photo.still_path is not None:
+                    live_photo.still_path.unlink(missing_ok=True)
+                if live_photo.motion_path is not None:
+                    live_photo.motion_path.unlink(missing_ok=True)
             except subprocess.CalledProcessError as e:
                 logging.error(f"Failed to capture image: {e.stderr}")
                 print(f"Failed to capture image from MediaMTX server: {e}")
