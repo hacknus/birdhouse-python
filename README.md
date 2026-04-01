@@ -71,6 +71,43 @@ rpicam-vid -t 0 \
   -f rtsp rtsp://raspberrypi.netbird.cloud:8554/birdcam
   ```
 
+For live-image capture, a better setup is to split the camera output before MediaMTX and keep a local rolling H.264 buffer on the Pi. Then set `LOCAL_VIDEO_BUFFER_DIR` in `.env` so `birdhouse-python` reads those local segments directly instead of subscribing back to RTSP.
+
+Example shell pipeline:
+
+```shell
+mkdir -p /home/birdie/birdhouse-buffer
+
+rpicam-vid -t 0 \
+  --codec h264 \
+  --profile high \
+  --level 4.2 \
+  --framerate 25 \
+  --width 1920 --height 1080 \
+  --bitrate 18000000 \
+  --intra 20 \
+  --denoise cdn_hq \
+  --awb daylight \
+  --autofocus-mode manual \
+  --lens-position 3.5 \
+  --saturation 1.8 \
+  --gain 2 \
+  --exposure normal \
+  --inline \
+  --nopreview \
+  -o - | tee \
+  >(ffmpeg -re -fflags +genpts -f h264 -i - -c:v copy -rtsp_transport tcp -f rtsp rtsp://raspberrypi.netbird.cloud:8554/birdcam) \
+  >(ffmpeg -f h264 -i - -c:v copy -f segment -segment_time 1 -strftime 1 -segment_format mpegts /home/birdie/birdhouse-buffer/segment_%Y%m%d_%H%M%S.ts) \
+  >/dev/null
+```
+
+Relevant `.env` entries:
+
+```env
+LOCAL_VIDEO_BUFFER_DIR=/home/birdie/birdhouse-buffer
+LIVE_VIDEO_ENCODER=libx264
+```
+
 And in a separate session, run the birdhouse-python script to log the sensor data:
 
 ```

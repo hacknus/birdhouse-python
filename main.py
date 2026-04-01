@@ -53,7 +53,11 @@ class VoegeliMonitor:
         self.bucket = self.db_store.bucket
         self.upload_image_token = env_values['UPLOAD_IMAGE_TOKEN']
         self.upload_image_url = env_values['UPLOAD_IMAGE_URL']
-        self.rtsp_recorder = PersistentRtspRecorder(self.mediamtx_url)
+        self.rtsp_recorder = PersistentRtspRecorder(
+            self.mediamtx_url,
+            local_buffer_dir=env_values.get("LOCAL_VIDEO_BUFFER_DIR"),
+            final_video_encoder=env_values.get("LIVE_VIDEO_ENCODER", "libx264"),
+        )
         self.rtsp_recorder.start()
 
         # I2C sensor setup

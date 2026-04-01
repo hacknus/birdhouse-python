@@ -20,19 +20,23 @@ class PersistentRtspRecorder:
         rtsp_url: str,
         *,
         buffer_dir: str = "gallery/.rtsp_buffer",
+        local_buffer_dir: str | None = None,
         rolling_window_seconds: int = 12,
         segment_time_seconds: float = 1.0,
         default_duration_seconds: float = 5.0,
         post_trigger_seconds: float = 2.5,
         decode_safety_margin_seconds: float = 1.0,
+        final_video_encoder: str = "libx264",
     ) -> None:
         self.rtsp_url = rtsp_url
-        self.buffer_dir = Path(buffer_dir)
+        self.buffer_dir = Path(local_buffer_dir) if local_buffer_dir else Path(buffer_dir)
+        self.local_buffer_dir = Path(local_buffer_dir) if local_buffer_dir else None
         self.rolling_window_seconds = rolling_window_seconds
         self.segment_time_seconds = segment_time_seconds
         self.default_duration_seconds = default_duration_seconds
         self.post_trigger_seconds = post_trigger_seconds
         self.decode_safety_margin_seconds = decode_safety_margin_seconds
+        self.final_video_encoder = final_video_encoder
         self.initial_wait_timeout_seconds = max(
             3.0,
             self.segment_time_seconds * 3,
@@ -47,6 +51,10 @@ class PersistentRtspRecorder:
 
     def start(self) -> None:
         self.buffer_dir.mkdir(parents=True, exist_ok=True)
+        if self.local_buffer_dir is not None:
+            self._started = True
+            logging.info("Using local video buffer directory %s", self.buffer_dir)
+            return
         with self._process_lock:
             if self._started and self._process is not None and self._process.poll() is None:
                 return
@@ -58,6 +66,9 @@ class PersistentRtspRecorder:
             self._monitor_thread.start()
 
     def stop(self) -> None:
+        if self.local_buffer_dir is not None:
+            self._started = False
+            return
         self._stop_event.set()
         if self._monitor_thread is not None:
             self._monitor_thread.join(timeout=2.0)
@@ -67,6 +78,8 @@ class PersistentRtspRecorder:
             self._started = False
 
     def ensure_running(self) -> None:
+        if self.local_buffer_dir is not None:
+            return
         with self._process_lock:
             if self._process is None or self._process.poll() is not None:
                 self._start_process_locked()
@@ -323,6 +336,7 @@ class PersistentRtspRecorder:
                 start_seconds=clip_start_seconds,
             )
 
+            encoder = self.final_video_encoder
             try:
                 self._encode_final_clip(
                     input_path=temp_ts_path,
@@ -330,23 +344,28 @@ class PersistentRtspRecorder:
                     asset_id=asset_id,
                     clip_start_seconds=clip_start_seconds,
                     duration_seconds=duration_seconds,
-                    encoder="h264_v4l2m2m",
-                    timeout_seconds=max(60, int(duration_seconds * 8)),
+                    encoder=encoder,
+                    timeout_seconds=max(60, int(duration_seconds * 8))
+                    if encoder == "h264_v4l2m2m"
+                    else max(90, int(duration_seconds * 12)),
                 )
             except subprocess.CalledProcessError as exc:
-                logging.warning(
-                    "Hardware H.264 encode failed, falling back to libx264: %s",
-                    exc.stderr.strip(),
-                )
-                self._encode_final_clip(
-                    input_path=temp_ts_path,
-                    output_path=output_path,
-                    asset_id=asset_id,
-                    clip_start_seconds=clip_start_seconds,
-                    duration_seconds=duration_seconds,
-                    encoder="libx264",
-                    timeout_seconds=max(90, int(duration_seconds * 12)),
-                )
+                if encoder == "h264_v4l2m2m":
+                    logging.warning(
+                        "Hardware H.264 encode failed, falling back to libx264: %s",
+                        exc.stderr.strip(),
+                    )
+                    self._encode_final_clip(
+                        input_path=temp_ts_path,
+                        output_path=output_path,
+                        asset_id=asset_id,
+                        clip_start_seconds=clip_start_seconds,
+                        duration_seconds=duration_seconds,
+                        encoder="libx264",
+                        timeout_seconds=max(90, int(duration_seconds * 12)),
+                    )
+                else:
+                    raise
         finally:
             concat_path.unlink(missing_ok=True)
 
