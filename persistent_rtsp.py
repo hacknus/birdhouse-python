@@ -341,7 +341,6 @@ class PersistentRtspRecorder:
             total_frame_count = self._count_frames(clip_path=temp_ts_path)
             measured_fps = self._estimate_effective_fps(
                 clip_path=temp_ts_path,
-                segments=segments,
                 total_frame_count=total_frame_count,
             )
             clip_frame_count = max(1, round(duration_seconds * measured_fps))
@@ -463,20 +462,9 @@ class PersistentRtspRecorder:
                 return frame_count
         raise RuntimeError(f"Could not determine frame count for {clip_path}")
 
-    def _estimate_effective_fps(
-        self,
-        *,
-        clip_path: Path,
-        segments: list[Path],
-        total_frame_count: int,
-    ) -> float:
+    def _estimate_effective_fps(self, *, clip_path: Path, total_frame_count: int) -> float:
         if total_frame_count <= 0:
             return self.video_fps
-
-        wallclock_fps = self._estimate_wallclock_fps(
-            segments=segments,
-            total_frame_count=total_frame_count,
-        )
 
         try:
             probe = subprocess.run(
@@ -500,7 +488,7 @@ class PersistentRtspRecorder:
                 clip_path,
                 self.video_fps,
             )
-            return wallclock_fps or self.video_fps
+            return self.video_fps
 
         payload = json.loads(probe.stdout or "{}")
         for stream in payload.get("streams", []):
@@ -514,15 +502,6 @@ class PersistentRtspRecorder:
                 except (ValueError, ZeroDivisionError):
                     continue
                 if 1.0 <= measured_fps <= 60.0:
-                    if wallclock_fps and measured_fps > (wallclock_fps * 1.05):
-                        logging.info(
-                            "Buffered clip %s=%s reports %.2f fps, but segment timing indicates %.2f fps; using wall-clock cadence.",
-                            key,
-                            raw_rate,
-                            measured_fps,
-                            wallclock_fps,
-                        )
-                        return wallclock_fps
                     logging.info(
                         "Using buffered clip %s=%s for playback cadence: %.2f fps.",
                         key,
@@ -542,13 +521,6 @@ class PersistentRtspRecorder:
                 continue
             measured_fps = total_frame_count / duration_seconds
             if 1.0 <= measured_fps <= 60.0:
-                if wallclock_fps and measured_fps > (wallclock_fps * 1.05):
-                    logging.info(
-                        "Buffered clip duration implies %.2f fps, but segment timing indicates %.2f fps; using wall-clock cadence.",
-                        measured_fps,
-                        wallclock_fps,
-                    )
-                    return wallclock_fps
                 logging.info(
                     "Measured buffered video cadence at %.2f fps from %d frames across %.2f seconds.",
                     measured_fps,
@@ -562,40 +534,7 @@ class PersistentRtspRecorder:
             clip_path,
             self.video_fps,
         )
-        return wallclock_fps or self.video_fps
-
-    def _estimate_wallclock_fps(self, *, segments: list[Path], total_frame_count: int) -> float | None:
-        if total_frame_count <= 0 or not segments:
-            return None
-
-        try:
-            segment_times = sorted(path.stat().st_mtime for path in segments)
-        except FileNotFoundError:
-            return None
-
-        if not segment_times:
-            return None
-
-        span_seconds = self.segment_time_seconds
-        if len(segment_times) > 1:
-            span_seconds = max(
-                self.segment_time_seconds,
-                (segment_times[-1] - segment_times[0]) + self.segment_time_seconds,
-            )
-
-        if span_seconds <= 0:
-            return None
-
-        measured_fps = total_frame_count / span_seconds
-        if 1.0 <= measured_fps <= 60.0:
-            logging.info(
-                "Segment timing indicates %.2f fps from %d frames across %.2f seconds.",
-                measured_fps,
-                total_frame_count,
-                span_seconds,
-            )
-            return measured_fps
-        return None
+        return self.video_fps
 
     def _extract_still_from_clip(self, *, clip_path: Path, still_path: Path, seek_seconds: float) -> None:
         subprocess.run(
