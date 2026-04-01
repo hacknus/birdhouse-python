@@ -77,7 +77,7 @@ def upload_live_photo(live_photo_result, token, url):
             "asset_kind": "live_photo_motion",
             "apple_metadata_ready": str(live_photo_result.apple_metadata_ready).lower(),
         },
-        content_type="video/quicktime",
+        content_type="application/octet-stream",
     )
     print(f"uploaded live photo motion {motion_path} ({bundle_id})")
     return still_response, motion_response
