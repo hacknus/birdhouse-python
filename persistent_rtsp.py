@@ -40,11 +40,16 @@ class PersistentRtspRecorder:
         self._export_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._monitor_thread: threading.Thread | None = None
+        self._started = False
 
     def start(self) -> None:
         self.buffer_dir.mkdir(parents=True, exist_ok=True)
         with self._process_lock:
+            if self._started and self._process is not None and self._process.poll() is None:
+                return
+            self._stop_event.clear()
             self._start_process_locked()
+            self._started = True
         if self._monitor_thread is None or not self._monitor_thread.is_alive():
             self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
             self._monitor_thread.start()
@@ -53,8 +58,10 @@ class PersistentRtspRecorder:
         self._stop_event.set()
         if self._monitor_thread is not None:
             self._monitor_thread.join(timeout=2.0)
+            self._monitor_thread = None
         with self._process_lock:
             self._stop_process_locked()
+            self._started = False
 
     def ensure_running(self) -> None:
         with self._process_lock:
@@ -148,7 +155,8 @@ class PersistentRtspRecorder:
         while not self._stop_event.wait(2.0):
             try:
                 self.ensure_running()
-                self._prune_old_segments()
+                with self._export_lock:
+                    self._prune_old_segments()
             except Exception:
                 logging.exception("Persistent RTSP recorder monitor failure.")
 
