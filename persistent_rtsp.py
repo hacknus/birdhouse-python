@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -315,57 +316,47 @@ class PersistentRtspRecorder:
         duration_seconds: float,
         decode_safety_margin_seconds: float,
     ) -> None:
-        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as tmp:
-            concat_path = Path(tmp.name)
-            for segment in segments:
-                tmp.write(f"file '{segment.resolve()}'\n")
-        try:
-            subprocess.run(
-                [
-                    "ffmpeg",
-                    "-hide_banner",
-                    "-loglevel", "warning",
-                    "-f", "concat",
-                    "-safe", "0",
-                    "-i", str(concat_path),
-                    "-c", "copy",
-                    "-y",
-                    str(temp_ts_path),
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=max(30, int(duration_seconds * 6), len(segments) * 6),
-            )
+        with tempfile.TemporaryDirectory() as temp_dir_name:
+            temp_dir = Path(temp_dir_name)
+            snapshot_paths: list[Path] = []
+            for index, segment in enumerate(segments):
+                snapshot_path = temp_dir / f"{index:03d}_{segment.name}"
+                shutil.copy2(segment, snapshot_path)
+                snapshot_paths.append(snapshot_path)
 
-            total_frame_count = self._count_frames(clip_path=temp_ts_path)
-            measured_fps = self._estimate_effective_fps(
-                clip_path=temp_ts_path,
-                total_frame_count=total_frame_count,
-            )
-            clip_frame_count = max(1, round(duration_seconds * measured_fps))
-            start_frame = max(0, total_frame_count - clip_frame_count)
-
-            encoder = self.final_video_encoder
+            with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as tmp:
+                concat_path = Path(tmp.name)
+                for snapshot_path in snapshot_paths:
+                    tmp.write(f"file '{snapshot_path.resolve()}'\n")
             try:
-                self._encode_final_clip(
-                    input_path=temp_ts_path,
-                    output_path=output_path,
-                    asset_id=asset_id,
-                    start_frame=start_frame,
-                    clip_frame_count=clip_frame_count,
-                    output_fps=measured_fps,
-                    encoder=encoder,
-                    timeout_seconds=max(60, int(duration_seconds * 8))
-                    if encoder == "h264_v4l2m2m"
-                    else max(90, int(duration_seconds * 12)),
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-hide_banner",
+                        "-loglevel", "warning",
+                        "-f", "concat",
+                        "-safe", "0",
+                        "-i", str(concat_path),
+                        "-c", "copy",
+                        "-y",
+                        str(temp_ts_path),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=max(30, int(duration_seconds * 6), len(segments) * 6),
                 )
-            except subprocess.CalledProcessError as exc:
-                if encoder == "h264_v4l2m2m":
-                    logging.warning(
-                        "Hardware H.264 encode failed, falling back to libx264: %s",
-                        exc.stderr.strip(),
-                    )
+
+                total_frame_count = self._count_frames(clip_path=temp_ts_path)
+                measured_fps = self._estimate_effective_fps(
+                    clip_path=temp_ts_path,
+                    total_frame_count=total_frame_count,
+                )
+                clip_frame_count = max(1, round(duration_seconds * measured_fps))
+                start_frame = max(0, total_frame_count - clip_frame_count)
+
+                encoder = self.final_video_encoder
+                try:
                     self._encode_final_clip(
                         input_path=temp_ts_path,
                         output_path=output_path,
@@ -373,13 +364,31 @@ class PersistentRtspRecorder:
                         start_frame=start_frame,
                         clip_frame_count=clip_frame_count,
                         output_fps=measured_fps,
-                        encoder="libx264",
-                        timeout_seconds=max(90, int(duration_seconds * 12)),
+                        encoder=encoder,
+                        timeout_seconds=max(60, int(duration_seconds * 8))
+                        if encoder == "h264_v4l2m2m"
+                        else max(90, int(duration_seconds * 12)),
                     )
-                else:
-                    raise
-        finally:
-            concat_path.unlink(missing_ok=True)
+                except subprocess.CalledProcessError as exc:
+                    if encoder == "h264_v4l2m2m":
+                        logging.warning(
+                            "Hardware H.264 encode failed, falling back to libx264: %s",
+                            exc.stderr.strip(),
+                        )
+                        self._encode_final_clip(
+                            input_path=temp_ts_path,
+                            output_path=output_path,
+                            asset_id=asset_id,
+                            start_frame=start_frame,
+                            clip_frame_count=clip_frame_count,
+                            output_fps=measured_fps,
+                            encoder="libx264",
+                            timeout_seconds=max(90, int(duration_seconds * 12)),
+                        )
+                    else:
+                        raise
+            finally:
+                concat_path.unlink(missing_ok=True)
 
     def _encode_final_clip(
         self,
