@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import json
 from pathlib import Path
 import logging
 import os
@@ -129,12 +127,9 @@ class PersistentRtspRecorder:
             asset_id = str(uuid.uuid4()).upper()
             warning_parts: list[str] = []
 
-            temp_ts_path = mov_path.with_suffix(".buffer.mkv")
-
             try:
                 self._render_segments_to_mov(
                     segments=segments,
-                    temp_ts_path=temp_ts_path,
                     output_path=mov_path,
                     asset_id=asset_id,
                     duration_seconds=duration_seconds,
@@ -150,19 +145,13 @@ class PersistentRtspRecorder:
 
             try:
                 self._extract_still_from_clip(
-                    clip_path=temp_ts_path,
+                    clip_path=mov_path,
                     still_path=jpg_path,
-                    seek_seconds=max(
-                        0.0,
-                        len(segments) * self.segment_time_seconds
-                        - (duration_seconds / 2.0),
-                    ),
+                    seek_seconds=max(0.0, duration_seconds / 2.0),
                 )
             except subprocess.TimeoutExpired:
-                logging.error("Timed out while extracting still image from %s.", temp_ts_path)
+                logging.error("Timed out while extracting still image from %s.", mov_path)
                 raise
-            finally:
-                temp_ts_path.unlink(missing_ok=True)
 
             if not jpg_path.exists():
                 logging.warning(
@@ -297,7 +286,6 @@ class PersistentRtspRecorder:
         self,
         *,
         segments: list[Path],
-        temp_ts_path: Path,
         output_path: Path,
         asset_id: str,
         duration_seconds: float,
@@ -307,76 +295,49 @@ class PersistentRtspRecorder:
             concat_path = Path(tmp.name)
             for segment in segments:
                 tmp.write(f"file '{segment.resolve()}'\n")
+        total_span_seconds = len(segments) * self.segment_time_seconds
+        clip_start_seconds = max(
+            decode_safety_margin_seconds,
+            max(0.0, total_span_seconds - duration_seconds),
+        )
+
+        encoder = self.final_video_encoder
         try:
-            subprocess.run(
-                [
-                    "ffmpeg",
-                    "-hide_banner",
-                    "-loglevel", "warning",
-                    "-f", "concat",
-                    "-safe", "0",
-                    "-i", str(concat_path),
-                    "-c", "copy",
-                    "-y",
-                    str(temp_ts_path),
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=max(30, int(duration_seconds * 4), len(segments) * 4),
+            self._encode_final_clip_from_concat(
+                concat_path=concat_path,
+                output_path=output_path,
+                asset_id=asset_id,
+                clip_start_seconds=clip_start_seconds,
+                duration_seconds=duration_seconds,
+                encoder=encoder,
+                timeout_seconds=max(60, int(duration_seconds * 8))
+                if encoder == "h264_v4l2m2m"
+                else max(90, int(duration_seconds * 12)),
             )
-
-            total_span_seconds = len(segments) * self.segment_time_seconds
-            clip_start_seconds = max(
-                0.0,
-                total_span_seconds - duration_seconds,
-            )
-            clip_start_seconds = max(
-                decode_safety_margin_seconds,
-                clip_start_seconds,
-            )
-            clip_start_seconds = self._find_first_keyframe_at_or_after(
-                clip_path=temp_ts_path,
-                start_seconds=clip_start_seconds,
-            )
-
-            encoder = self.final_video_encoder
-            try:
-                self._encode_final_clip(
-                    input_path=temp_ts_path,
+        except subprocess.CalledProcessError as exc:
+            if encoder == "h264_v4l2m2m":
+                logging.warning(
+                    "Hardware H.264 encode failed, falling back to libx264: %s",
+                    exc.stderr.strip(),
+                )
+                self._encode_final_clip_from_concat(
+                    concat_path=concat_path,
                     output_path=output_path,
                     asset_id=asset_id,
                     clip_start_seconds=clip_start_seconds,
                     duration_seconds=duration_seconds,
-                    encoder=encoder,
-                    timeout_seconds=max(60, int(duration_seconds * 8))
-                    if encoder == "h264_v4l2m2m"
-                    else max(90, int(duration_seconds * 12)),
+                    encoder="libx264",
+                    timeout_seconds=max(90, int(duration_seconds * 12)),
                 )
-            except subprocess.CalledProcessError as exc:
-                if encoder == "h264_v4l2m2m":
-                    logging.warning(
-                        "Hardware H.264 encode failed, falling back to libx264: %s",
-                        exc.stderr.strip(),
-                    )
-                    self._encode_final_clip(
-                        input_path=temp_ts_path,
-                        output_path=output_path,
-                        asset_id=asset_id,
-                        clip_start_seconds=clip_start_seconds,
-                        duration_seconds=duration_seconds,
-                        encoder="libx264",
-                        timeout_seconds=max(90, int(duration_seconds * 12)),
-                    )
-                else:
-                    raise
+            else:
+                raise
         finally:
             concat_path.unlink(missing_ok=True)
 
-    def _encode_final_clip(
+    def _encode_final_clip_from_concat(
         self,
         *,
-        input_path: Path,
+        concat_path: Path,
         output_path: Path,
         asset_id: str,
         clip_start_seconds: float,
@@ -389,8 +350,10 @@ class PersistentRtspRecorder:
             "-hide_banner",
             "-loglevel", "warning",
             "-fflags", "+genpts",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(concat_path),
             "-ss", str(clip_start_seconds),
-            "-i", str(input_path),
             "-t", str(duration_seconds),
             "-an",
             "-vf", "scale=1920:-2,fps=25,setpts=PTS-STARTPTS",
@@ -416,37 +379,6 @@ class PersistentRtspRecorder:
             text=True,
             timeout=timeout_seconds,
         )
-
-    def _find_first_keyframe_at_or_after(self, *, clip_path: Path, start_seconds: float) -> float:
-        probe = subprocess.run(
-            [
-                "ffprobe",
-                "-hide_banner",
-                "-loglevel", "error",
-                "-select_streams", "v:0",
-                "-skip_frame", "nokey",
-                "-show_frames",
-                "-show_entries", "frame=pts_time",
-                "-of", "json",
-                str(clip_path),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-        payload = json.loads(probe.stdout or "{}")
-        for frame in payload.get("frames", []):
-            pts_time = frame.get("pts_time")
-            if pts_time is None:
-                continue
-            try:
-                pts = float(pts_time)
-            except (TypeError, ValueError):
-                continue
-            if pts >= start_seconds:
-                return pts
-        return start_seconds
 
     def _iter_segment_files(self) -> list[Path]:
         segment_files: list[Path] = []
