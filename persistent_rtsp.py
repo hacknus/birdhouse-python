@@ -111,16 +111,30 @@ class PersistentRtspRecorder:
             asset_id = str(uuid.uuid4()).upper()
             warning_parts: list[str] = []
 
-            self._concat_segments_to_mov(
-                segments=segments,
-                output_path=mov_path,
-                asset_id=asset_id,
-            )
-            self._extract_still_from_clip(
-                clip_path=mov_path,
-                still_path=jpg_path,
-                seek_seconds=max(0.0, duration_seconds / 2.0),
-            )
+            try:
+                self._concat_segments_to_mov(
+                    segments=segments,
+                    output_path=mov_path,
+                    asset_id=asset_id,
+                    duration_seconds=duration_seconds,
+                )
+            except subprocess.TimeoutExpired:
+                logging.error(
+                    "Timed out while concatenating %d RTSP segments into %s.",
+                    len(segments),
+                    mov_path,
+                )
+                raise
+
+            try:
+                self._extract_still_from_clip(
+                    clip_path=mov_path,
+                    still_path=jpg_path,
+                    seek_seconds=max(0.0, duration_seconds / 2.0),
+                )
+            except subprocess.TimeoutExpired:
+                logging.error("Timed out while extracting still image from %s.", mov_path)
+                raise
 
             try:
                 still_metadata_written = _write_still_metadata(jpg_path, asset_id)
@@ -233,7 +247,14 @@ class PersistentRtspRecorder:
             time.sleep(0.25)
         return []
 
-    def _concat_segments_to_mov(self, *, segments: list[Path], output_path: Path, asset_id: str) -> None:
+    def _concat_segments_to_mov(
+        self,
+        *,
+        segments: list[Path],
+        output_path: Path,
+        asset_id: str,
+        duration_seconds: float,
+    ) -> None:
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as tmp:
             concat_path = Path(tmp.name)
             for segment in segments:
@@ -256,7 +277,7 @@ class PersistentRtspRecorder:
                 check=True,
                 capture_output=True,
                 text=True,
-                timeout=max(15, len(segments) * 2),
+                timeout=max(30, int(duration_seconds * 4), len(segments) * 4),
             )
         finally:
             concat_path.unlink(missing_ok=True)
