@@ -10,7 +10,7 @@ import threading
 import time
 import uuid
 
-from live_photo import LivePhotoResult, _write_still_metadata
+from live_photo import LivePhotoResult, _write_still_metadata, save_live_photo_bundle
 
 
 class PersistentRtspRecorder:
@@ -30,6 +30,10 @@ class PersistentRtspRecorder:
         self.segment_time_seconds = segment_time_seconds
         self.default_duration_seconds = default_duration_seconds
         self.post_trigger_seconds = post_trigger_seconds
+        self.initial_wait_timeout_seconds = max(
+            3.0,
+            self.segment_time_seconds * 3,
+        )
 
         self._process: subprocess.Popen | None = None
         self._process_lock = threading.Lock()
@@ -79,7 +83,21 @@ class PersistentRtspRecorder:
 
             segments = self._select_recent_segments(duration_seconds=duration_seconds)
             if not segments:
-                raise RuntimeError("No RTSP buffer segments available yet")
+                segments = self._wait_for_segments(duration_seconds=duration_seconds)
+            if not segments:
+                logging.warning("RTSP buffer not ready; falling back to direct live capture.")
+                live_photo = save_live_photo_bundle(
+                    rtsp_url=self.rtsp_url,
+                    timestamp=timestamp,
+                    output_dir=output_dir,
+                    duration_seconds=duration_seconds,
+                )
+                warning = "Persistent RTSP buffer was not ready; used direct capture fallback"
+                if live_photo.warning:
+                    live_photo.warning = f"{live_photo.warning}; {warning}"
+                else:
+                    live_photo.warning = warning
+                return live_photo
 
             mov_path = out_dir / f"{timestamp}.mov"
             jpg_path = out_dir / f"{timestamp}.jpg"
@@ -196,6 +214,16 @@ class PersistentRtspRecorder:
         required_segments = max(2, int(duration_seconds / self.segment_time_seconds) + 2)
         segments = sorted(self.buffer_dir.glob("segment_*.ts"), key=lambda p: p.stat().st_mtime)
         return segments[-required_segments:]
+
+    def _wait_for_segments(self, *, duration_seconds: float) -> list[Path]:
+        deadline = time.time() + self.initial_wait_timeout_seconds
+        while time.time() < deadline:
+            segments = self._select_recent_segments(duration_seconds=duration_seconds)
+            if segments:
+                return segments
+            self.ensure_running()
+            time.sleep(0.25)
+        return []
 
     def _concat_segments_to_mov(self, *, segments: list[Path], output_path: Path, asset_id: str) -> None:
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as tmp:
