@@ -27,6 +27,7 @@ class PersistentRtspRecorder:
         post_trigger_seconds: float = 2.5,
         decode_safety_margin_seconds: float = 1.0,
         final_video_encoder: str = "libx264",
+        video_fps: float = 25.0,
     ) -> None:
         self.rtsp_url = rtsp_url
         self.buffer_dir = Path(local_buffer_dir) if local_buffer_dir else Path(buffer_dir)
@@ -37,6 +38,7 @@ class PersistentRtspRecorder:
         self.post_trigger_seconds = post_trigger_seconds
         self.decode_safety_margin_seconds = decode_safety_margin_seconds
         self.final_video_encoder = final_video_encoder
+        self.video_fps = video_fps
         self.initial_wait_timeout_seconds = max(
             3.0,
             self.segment_time_seconds * 3,
@@ -150,30 +152,15 @@ class PersistentRtspRecorder:
 
             try:
                 self._extract_still_from_clip(
-                    clip_path=temp_ts_path,
-                    still_path=jpg_path,
-                    seek_seconds=max(
-                        0.0,
-                        len(segments) * self.segment_time_seconds
-                        - (duration_seconds / 2.0),
-                    ),
-                )
-            except subprocess.TimeoutExpired:
-                logging.error("Timed out while extracting still image from %s.", temp_ts_path)
-                raise
-            finally:
-                temp_ts_path.unlink(missing_ok=True)
-
-            if not jpg_path.exists():
-                logging.warning(
-                    "Still image %s missing after buffered extraction; retrying from rendered MOV.",
-                    jpg_path,
-                )
-                self._extract_still_from_clip(
                     clip_path=mov_path,
                     still_path=jpg_path,
                     seek_seconds=max(0.0, duration_seconds / 2.0),
                 )
+            except subprocess.TimeoutExpired:
+                logging.error("Timed out while extracting still image from %s.", mov_path)
+                raise
+            finally:
+                temp_ts_path.unlink(missing_ok=True)
 
             if not jpg_path.exists():
                 raise FileNotFoundError(f"{jpg_path} not found after still extraction")
@@ -394,8 +381,9 @@ class PersistentRtspRecorder:
             "-i", str(input_path),
             "-t", str(duration_seconds),
             "-an",
-            "-vf", "scale=1920:-2,fps=25,setpts=PTS-STARTPTS",
+            "-vf", f"setpts=N/({self.video_fps}*TB),fps={self.video_fps:g},scale=1920:-2",
             "-pix_fmt", "yuv420p",
+            "-r", f"{self.video_fps:g}",
             "-b:v", "9000k",
             "-maxrate", "9000k",
             "-bufsize", "18000k",
