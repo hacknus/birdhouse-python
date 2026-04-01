@@ -74,7 +74,7 @@ def save_live_photo_bundle(
         _run_ffmpeg([
             "ffmpeg",
             "-rtsp_transport", "tcp",
-            "-rw_timeout", _RTSP_IO_TIMEOUT_US,
+            "-timeout", _RTSP_IO_TIMEOUT_US,
             "-i", rtsp_url,
             "-frames:v", "1",
             "-q:v", "2",
@@ -97,7 +97,7 @@ def save_live_photo_bundle(
         _run_ffmpeg([
             "ffmpeg",
             "-rtsp_transport", "tcp",
-            "-rw_timeout", _RTSP_IO_TIMEOUT_US,
+            "-timeout", _RTSP_IO_TIMEOUT_US,
             "-i", rtsp_url,
             "-map", "0:v:0",
             "-t", str(duration_seconds),

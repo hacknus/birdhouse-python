@@ -161,7 +161,7 @@ class PersistentRtspRecorder:
             "-hide_banner",
             "-loglevel", "warning",
             "-rtsp_transport", "tcp",
-            "-rw_timeout", "10000000",
+            "-timeout", "10000000",
             "-i", self.rtsp_url,
             "-map", "0:v:0",
             "-an",
