@@ -133,18 +133,16 @@ class VoegeliMonitor:
         )
         if live_photo.warning:
             logging.warning("Live image %s warning: %s", timestamp, live_photo.warning)
-        try:
-            upload_live_photo(
-                live_photo_result=live_photo,
-                token=self.upload_image_token,
-                url=self.upload_image_url,
-            )
-            return live_photo
-        finally:
-            if live_photo.still_path is not None:
-                live_photo.still_path.unlink(missing_ok=True)
-            if live_photo.motion_path is not None:
-                live_photo.motion_path.unlink(missing_ok=True)
+        upload_live_photo(
+            live_photo_result=live_photo,
+            token=self.upload_image_token,
+            url=self.upload_image_url,
+        )
+        if live_photo.still_path is not None:
+            live_photo.still_path.unlink(missing_ok=True)
+        if live_photo.motion_path is not None:
+            live_photo.motion_path.unlink(missing_ok=True)
+        return live_photo
 
     # Function to read temperature and humidity
     def read_temperature_humidity(self, sensor, sensirion=False):
