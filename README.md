@@ -88,7 +88,6 @@ rpicam-vid -t 0 \
   --bitrate 18000000 \
   --intra 20 \
   --denoise cdn_hq \
-  --awb daylight \
   --autofocus-mode manual \
   --lens-position 3.5 \
   --saturation 1.8 \

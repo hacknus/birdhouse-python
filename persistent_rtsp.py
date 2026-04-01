@@ -316,7 +316,7 @@ class PersistentRtspRecorder:
 
             total_frame_count = self._count_frames(clip_path=temp_ts_path)
             measured_fps = self._estimate_effective_fps(
-                segments=segments,
+                clip_path=temp_ts_path,
                 total_frame_count=total_frame_count,
             )
             clip_frame_count = max(1, round(duration_seconds * measured_fps))
@@ -438,41 +438,76 @@ class PersistentRtspRecorder:
                 return frame_count
         raise RuntimeError(f"Could not determine frame count for {clip_path}")
 
-    def _estimate_effective_fps(self, *, segments: list[Path], total_frame_count: int) -> float:
+    def _estimate_effective_fps(self, *, clip_path: Path, total_frame_count: int) -> float:
         if total_frame_count <= 0:
             return self.video_fps
 
         try:
-            segment_times = sorted(path.stat().st_mtime for path in segments)
-        except FileNotFoundError:
-            return self.video_fps
-
-        if not segment_times:
-            return self.video_fps
-
-        span_seconds = self.segment_time_seconds
-        if len(segment_times) > 1:
-            span_seconds = max(
-                self.segment_time_seconds,
-                (segment_times[-1] - segment_times[0]) + self.segment_time_seconds,
+            probe = subprocess.run(
+                [
+                    "ffprobe",
+                    "-hide_banner",
+                    "-loglevel", "error",
+                    "-select_streams", "v:0",
+                    "-show_entries", "stream=avg_frame_rate,r_frame_rate,duration",
+                    "-of", "json",
+                    str(clip_path),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=20,
             )
-
-        if span_seconds <= 0:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            logging.warning(
+                "Could not probe buffered clip fps for %s; falling back to configured %.2f fps.",
+                clip_path,
+                self.video_fps,
+            )
             return self.video_fps
 
-        measured_fps = total_frame_count / span_seconds
-        if 1.0 <= measured_fps <= 60.0:
-            logging.info(
-                "Measured buffered video cadence at %.2f fps from %d frames across %.2f seconds.",
-                measured_fps,
-                total_frame_count,
-                span_seconds,
-            )
-            return measured_fps
+        payload = json.loads(probe.stdout or "{}")
+        for stream in payload.get("streams", []):
+            for key in ("avg_frame_rate", "r_frame_rate"):
+                raw_rate = stream.get(key)
+                if not raw_rate or raw_rate in {"0/0", "N/A"}:
+                    continue
+                try:
+                    numerator, denominator = raw_rate.split("/", 1)
+                    measured_fps = float(numerator) / float(denominator)
+                except (ValueError, ZeroDivisionError):
+                    continue
+                if 1.0 <= measured_fps <= 60.0:
+                    logging.info(
+                        "Using buffered clip %s=%s for playback cadence: %.2f fps.",
+                        key,
+                        raw_rate,
+                        measured_fps,
+                    )
+                    return measured_fps
+
+            raw_duration = stream.get("duration")
+            if raw_duration in (None, "N/A"):
+                continue
+            try:
+                duration_seconds = float(raw_duration)
+            except (TypeError, ValueError):
+                continue
+            if duration_seconds <= 0:
+                continue
+            measured_fps = total_frame_count / duration_seconds
+            if 1.0 <= measured_fps <= 60.0:
+                logging.info(
+                    "Measured buffered video cadence at %.2f fps from %d frames across %.2f seconds.",
+                    measured_fps,
+                    total_frame_count,
+                    duration_seconds,
+                )
+                return measured_fps
 
         logging.warning(
-            "Discarding implausible measured fps %.2f; falling back to configured %.2f fps.",
-            measured_fps,
+            "Could not derive plausible fps from %s; falling back to configured %.2f fps.",
+            clip_path,
             self.video_fps,
         )
         return self.video_fps
