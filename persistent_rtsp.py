@@ -347,13 +347,9 @@ class PersistentRtspRecorder:
                     timeout=max(30, int(duration_seconds * 6), len(segments) * 6),
                 )
 
-                total_frame_count = self._count_frames(clip_path=temp_ts_path)
-                measured_fps = self._estimate_effective_fps(
-                    clip_path=temp_ts_path,
-                    total_frame_count=total_frame_count,
-                )
-                clip_frame_count = max(1, round(duration_seconds * measured_fps))
-                start_frame = max(0, total_frame_count - clip_frame_count)
+                clip_duration_seconds = self._probe_clip_duration(clip_path=temp_ts_path)
+                measured_fps = self._estimate_effective_fps(clip_path=temp_ts_path)
+                start_seconds = max(0.0, clip_duration_seconds - duration_seconds)
 
                 encoder = self.final_video_encoder
                 try:
@@ -361,8 +357,8 @@ class PersistentRtspRecorder:
                         input_path=temp_ts_path,
                         output_path=output_path,
                         asset_id=asset_id,
-                        start_frame=start_frame,
-                        clip_frame_count=clip_frame_count,
+                        start_seconds=start_seconds,
+                        clip_duration_seconds=duration_seconds,
                         output_fps=measured_fps,
                         encoder=encoder,
                         timeout_seconds=max(60, int(duration_seconds * 8))
@@ -379,8 +375,8 @@ class PersistentRtspRecorder:
                             input_path=temp_ts_path,
                             output_path=output_path,
                             asset_id=asset_id,
-                            start_frame=start_frame,
-                            clip_frame_count=clip_frame_count,
+                            start_seconds=start_seconds,
+                            clip_duration_seconds=duration_seconds,
                             output_fps=measured_fps,
                             encoder="libx264",
                             timeout_seconds=max(90, int(duration_seconds * 12)),
@@ -396,13 +392,12 @@ class PersistentRtspRecorder:
         input_path: Path,
         output_path: Path,
         asset_id: str,
-        start_frame: int,
-        clip_frame_count: int,
+        start_seconds: float,
+        clip_duration_seconds: float,
         output_fps: float,
         encoder: str,
         timeout_seconds: int,
     ) -> None:
-        end_frame = start_frame + clip_frame_count
         if encoder == "h264_v4l2m2m":
             encoder_args = ["-c:v", "h264_v4l2m2m"]
         else:
@@ -416,8 +411,8 @@ class PersistentRtspRecorder:
             "-an",
             "-vf",
             (
-                f"trim=start_frame={start_frame}:end_frame={end_frame},"
-                f"setpts=N/({output_fps}*TB),"
+                f"trim=start={start_seconds:.6f}:duration={clip_duration_seconds:.6f},"
+                "setpts=PTS-STARTPTS,"
                 f"fps={output_fps:g},"
                 "scale=1920:-2"
             ),
@@ -441,15 +436,14 @@ class PersistentRtspRecorder:
             timeout=timeout_seconds,
         )
 
-    def _count_frames(self, *, clip_path: Path) -> int:
+    def _probe_clip_duration(self, *, clip_path: Path) -> float:
         probe = subprocess.run(
             [
                 "ffprobe",
                 "-hide_banner",
                 "-loglevel", "error",
                 "-select_streams", "v:0",
-                "-count_frames",
-                "-show_entries", "stream=nb_read_frames",
+                "-show_entries", "stream=duration",
                 "-of", "json",
                 str(clip_path),
             ],
@@ -460,21 +454,18 @@ class PersistentRtspRecorder:
         )
         payload = json.loads(probe.stdout or "{}")
         for stream in payload.get("streams", []):
-            nb_read_frames = stream.get("nb_read_frames")
-            if nb_read_frames is None:
+            raw_duration = stream.get("duration")
+            if raw_duration in (None, "N/A"):
                 continue
             try:
-                frame_count = int(nb_read_frames)
+                duration_seconds = float(raw_duration)
             except (TypeError, ValueError):
                 continue
-            if frame_count > 0:
-                return frame_count
-        raise RuntimeError(f"Could not determine frame count for {clip_path}")
+            if duration_seconds > 0:
+                return duration_seconds
+        raise RuntimeError(f"Could not determine duration for {clip_path}")
 
-    def _estimate_effective_fps(self, *, clip_path: Path, total_frame_count: int) -> float:
-        if total_frame_count <= 0:
-            return self.video_fps
-
+    def _estimate_effective_fps(self, *, clip_path: Path) -> float:
         try:
             probe = subprocess.run(
                 [
@@ -518,25 +509,6 @@ class PersistentRtspRecorder:
                         measured_fps,
                     )
                     return measured_fps
-
-            raw_duration = stream.get("duration")
-            if raw_duration in (None, "N/A"):
-                continue
-            try:
-                duration_seconds = float(raw_duration)
-            except (TypeError, ValueError):
-                continue
-            if duration_seconds <= 0:
-                continue
-            measured_fps = total_frame_count / duration_seconds
-            if 1.0 <= measured_fps <= 60.0:
-                logging.info(
-                    "Measured buffered video cadence at %.2f fps from %d frames across %.2f seconds.",
-                    measured_fps,
-                    total_frame_count,
-                    duration_seconds,
-                )
-                return measured_fps
 
         logging.warning(
             "Could not derive plausible fps from %s; falling back to configured %.2f fps.",
