@@ -239,7 +239,6 @@ class PersistentRtspRecorder:
             "-segment_time", str(self.segment_time_seconds),
             "-segment_wrap", str(segment_wrap),
             "-segment_list_size", str(segment_wrap),
-            "-reset_timestamps", "1",
             "-segment_format", "mpegts",
             "-segment_format_options", "mpegts_flags=resend_headers",
             segment_pattern,
