@@ -220,7 +220,11 @@ class PersistentRtspRecorder:
     def _start_process_locked(self) -> None:
         self._stop_process_locked()
         self.buffer_dir.mkdir(parents=True, exist_ok=True)
-        segment_pattern = str(self.buffer_dir / "segment_%Y%m%d_%H%M%S.ts")
+        segment_pattern = str(self.buffer_dir / "segment_%03d.ts")
+        segment_wrap = max(
+            8,
+            int(self.rolling_window_seconds / max(self.segment_time_seconds, 0.1)) + 4,
+        )
         cmd = [
             "ffmpeg",
             "-hide_banner",
@@ -233,7 +237,9 @@ class PersistentRtspRecorder:
             "-c", "copy",
             "-f", "segment",
             "-segment_time", str(self.segment_time_seconds),
-            "-strftime", "1",
+            "-segment_wrap", str(segment_wrap),
+            "-segment_list_size", str(segment_wrap),
+            "-reset_timestamps", "1",
             "-segment_format", "mpegts",
             "-segment_format_options", "mpegts_flags=resend_headers",
             segment_pattern,

@@ -97,7 +97,7 @@ rpicam-vid -t 0 \
   --nopreview \
   -o - | tee \
   >(ffmpeg -re -fflags +genpts -f h264 -i - -c:v copy -rtsp_transport tcp -f rtsp rtsp://raspberrypi.netbird.cloud:8554/birdcam) \
-  >(ffmpeg -f h264 -i - -c:v copy -f segment -segment_time 1 -strftime 1 -segment_format mpegts /home/birdie/birdhouse-buffer/segment_%Y%m%d_%H%M%S.ts) \
+  >(ffmpeg -fflags +genpts -f h264 -i - -c:v copy -f segment -segment_time 1 -segment_wrap 16 -segment_list_size 16 -reset_timestamps 1 -segment_format mpegts /home/birdie/birdhouse-buffer/segment_%03d.ts) \
   >/dev/null
 ```
 
