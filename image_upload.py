@@ -2,6 +2,11 @@ import requests
 from dotenv import dotenv_values
 from pathlib import Path
 
+
+class UploadImageError(RuntimeError):
+    pass
+
+
 def upload_image(image_path, token, url, extra_data=None, content_type="application/octet-stream"):
     """
     Upload a file as multipart/form-data with fields:
@@ -14,6 +19,7 @@ def upload_image(image_path, token, url, extra_data=None, content_type="applicat
         raise FileNotFoundError(f"{image_path} not found")
 
     filename = image_path.name
+    file_size = image_path.stat().st_size
 
     with image_path.open("rb") as f:
         files = {"file": (filename, f, content_type)}
@@ -30,7 +36,12 @@ def upload_image(image_path, token, url, extra_data=None, content_type="applicat
         except Exception:
             print(resp.text)
     else:
+        print(f"upload failed for {image_path} ({file_size} bytes, {content_type})")
         print(f"✗ HTTP {resp.status_code}: {resp.text}")
+        raise UploadImageError(
+            f"Upload failed for {image_path.name} ({file_size} bytes, {content_type}): "
+            f"HTTP {resp.status_code} {resp.text}"
+        )
 
     return resp
 
@@ -43,7 +54,7 @@ def upload_live_photo(live_photo_result, token, url):
         raise ValueError("Live photo bundle is incomplete")
 
     bundle_id = live_photo_result.bundle_id
-    upload_image(
+    still_response = upload_image(
         image_path=still_path,
         token=token,
         url=url,
@@ -55,7 +66,8 @@ def upload_live_photo(live_photo_result, token, url):
         },
         content_type="image/jpeg",
     )
-    return upload_image(
+    print(f"uploaded live photo still {still_path} ({bundle_id})")
+    motion_response = upload_image(
         image_path=motion_path,
         token=token,
         url=url,
@@ -67,6 +79,8 @@ def upload_live_photo(live_photo_result, token, url):
         },
         content_type="video/quicktime",
     )
+    print(f"uploaded live photo motion {motion_path} ({bundle_id})")
+    return still_response, motion_response
 
 if __name__ == "__main__":
     env = dotenv_values(".env")

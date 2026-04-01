@@ -29,7 +29,7 @@ import psycopg
 
 from camera import get_ir_led_state, turn_ir_on, turn_ir_off
 from ignore_motion import are_we_still_blocked
-from image_upload import upload_live_photo
+from image_upload import UploadImageError, upload_live_photo
 from persistent_rtsp import PersistentRtspRecorder
 from postgresql_store import PostgresTimeSeriesStore
 from time_utils import bern_image_timestamp
@@ -445,6 +445,8 @@ class Radar:
             except subprocess.CalledProcessError as e:
                 logging.error(f"Failed to capture image: {e.stderr}")
                 print(f"Failed to capture image from MediaMTX server: {e}")
+            except UploadImageError as e:
+                logging.error("Failed to upload radar live image: %s", e)
             except subprocess.TimeoutExpired:
                 logging.error("Timed out while capturing live image.")
 

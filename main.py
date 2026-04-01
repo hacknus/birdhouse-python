@@ -16,7 +16,7 @@ import csv
 import datetime
 import threading
 
-from image_upload import upload_live_photo
+from image_upload import UploadImageError, upload_live_photo
 from persistent_rtsp import PersistentRtspRecorder
 from radar import Radar
 from time_utils import bern_image_timestamp
@@ -442,6 +442,9 @@ if __name__ == "__main__":
                     except subprocess.CalledProcessError as e:
                         logging.error(f"Failed to save image: {e.stderr}")
                         voegeli_monitor.send_tcp_rep("[REP] Failed to save image: MediaMTX server error")
+                    except UploadImageError as e:
+                        logging.error("Failed to upload live image: %s", e)
+                        voegeli_monitor.send_tcp_rep("[REP] Failed to upload live image")
                     except subprocess.TimeoutExpired:
                         logging.error("Timed out while saving live image.")
                         voegeli_monitor.send_tcp_rep("[REP] Failed to save image: timed out")
