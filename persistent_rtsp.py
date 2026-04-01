@@ -111,9 +111,12 @@ class PersistentRtspRecorder:
             asset_id = str(uuid.uuid4()).upper()
             warning_parts: list[str] = []
 
+            temp_ts_path = mov_path.with_suffix(".buffer.ts")
+
             try:
                 self._render_segments_to_mov(
                     segments=segments,
+                    temp_ts_path=temp_ts_path,
                     output_path=mov_path,
                     asset_id=asset_id,
                     duration_seconds=duration_seconds,
@@ -128,13 +131,15 @@ class PersistentRtspRecorder:
 
             try:
                 self._extract_still_from_clip(
-                    clip_path=mov_path,
+                    clip_path=temp_ts_path,
                     still_path=jpg_path,
-                    seek_seconds=max(0.0, duration_seconds / 2.0),
+                    seek_seconds=max(0.0, len(segments) * self.segment_time_seconds - (duration_seconds / 2.0)),
                 )
             except subprocess.TimeoutExpired:
-                logging.error("Timed out while extracting still image from %s.", mov_path)
+                logging.error("Timed out while extracting still image from %s.", temp_ts_path)
                 raise
+            finally:
+                temp_ts_path.unlink(missing_ok=True)
 
             try:
                 still_metadata_written = _write_still_metadata(jpg_path, asset_id)
@@ -251,6 +256,7 @@ class PersistentRtspRecorder:
         self,
         *,
         segments: list[Path],
+        temp_ts_path: Path,
         output_path: Path,
         asset_id: str,
         duration_seconds: float,
@@ -259,7 +265,6 @@ class PersistentRtspRecorder:
             concat_path = Path(tmp.name)
             for segment in segments:
                 tmp.write(f"file '{segment.resolve()}'\n")
-        temp_ts_path = output_path.with_suffix(".buffer.ts")
         try:
             subprocess.run(
                 [
@@ -287,16 +292,18 @@ class PersistentRtspRecorder:
                     "ffmpeg",
                     "-hide_banner",
                     "-loglevel", "warning",
+                    "-fflags", "+genpts",
                     "-ss", str(clip_start_seconds),
                     "-i", str(temp_ts_path),
                     "-t", str(duration_seconds),
                     "-an",
                     "-c:v", "libx264",
-                    "-preset", "veryfast",
+                    "-preset", "ultrafast",
+                    "-vf", "scale=960:-2,fps=15",
                     "-pix_fmt", "yuv420p",
-                    "-b:v", "1500k",
-                    "-maxrate", "1800k",
-                    "-bufsize", "3000k",
+                    "-b:v", "900k",
+                    "-maxrate", "1100k",
+                    "-bufsize", "1800k",
                     "-movflags", "+faststart+use_metadata_tags",
                     "-metadata", f"com.apple.quicktime.content.identifier={asset_id}",
                     "-y",
@@ -305,11 +312,10 @@ class PersistentRtspRecorder:
                 check=True,
                 capture_output=True,
                 text=True,
-                timeout=max(45, int(duration_seconds * 8)),
+                timeout=max(90, int(duration_seconds * 12)),
             )
         finally:
             concat_path.unlink(missing_ok=True)
-            temp_ts_path.unlink(missing_ok=True)
 
     def _extract_still_from_clip(self, *, clip_path: Path, still_path: Path, seek_seconds: float) -> None:
         subprocess.run(
