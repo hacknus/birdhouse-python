@@ -368,9 +368,9 @@ class PersistentRtspRecorder:
         ]
 
         if encoder == "h264_v4l2m2m":
-            cmd[10:10] = ["-c:v", "h264_v4l2m2m"]
+            cmd[-2:-2] = ["-c:v", "h264_v4l2m2m"]
         else:
-            cmd[10:10] = ["-c:v", "libx264", "-preset", "ultrafast"]
+            cmd[-2:-2] = ["-c:v", "libx264", "-preset", "ultrafast"]
 
         subprocess.run(
             cmd,
