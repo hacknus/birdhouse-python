@@ -159,6 +159,7 @@ class PersistentRtspRecorder:
             return LivePhotoResult(
                 still_path=jpg_path,
                 motion_path=mov_path,
+                bundle_id=timestamp,
                 asset_id=asset_id,
                 used_heic=False,
                 apple_metadata_ready=False,
@@ -191,7 +192,6 @@ class PersistentRtspRecorder:
             "-f", "segment",
             "-segment_time", str(self.segment_time_seconds),
             "-strftime", "1",
-            "-reset_timestamps", "1",
             "-segment_format", "mpegts",
             "-segment_format_options", "mpegts_flags=resend_headers",
             segment_pattern,
@@ -268,6 +268,7 @@ class PersistentRtspRecorder:
                     "-f", "concat",
                     "-safe", "0",
                     "-i", str(concat_path),
+                    "-fflags", "+genpts",
                     "-c", "copy",
                     "-movflags", "+faststart+use_metadata_tags",
                     "-metadata", f"com.apple.quicktime.content.identifier={asset_id}",

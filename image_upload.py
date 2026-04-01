@@ -42,13 +42,14 @@ def upload_live_photo(live_photo_result, token, url):
     if still_path is None or motion_path is None:
         raise ValueError("Live photo bundle is incomplete")
 
-    bundle_id = live_photo_result.asset_id
+    bundle_id = live_photo_result.bundle_id
     upload_image(
         image_path=still_path,
         token=token,
         url=url,
         extra_data={
             "bundle_id": bundle_id,
+            "asset_id": live_photo_result.asset_id,
             "asset_kind": "live_photo_still",
             "apple_metadata_ready": str(live_photo_result.apple_metadata_ready).lower(),
         },
@@ -60,6 +61,7 @@ def upload_live_photo(live_photo_result, token, url):
         url=url,
         extra_data={
             "bundle_id": bundle_id,
+            "asset_id": live_photo_result.asset_id,
             "asset_kind": "live_photo_motion",
             "apple_metadata_ready": str(live_photo_result.apple_metadata_ready).lower(),
         },

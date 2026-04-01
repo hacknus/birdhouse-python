@@ -18,6 +18,7 @@ _RTSP_IO_TIMEOUT_US = "10000000"
 class LivePhotoResult:
     still_path: Path | None
     motion_path: Path | None
+    bundle_id: str
     asset_id: str
     used_heic: bool
     apple_metadata_ready: bool
@@ -121,6 +122,7 @@ def save_live_photo_bundle(
         return LivePhotoResult(
             still_path=jpg_path,
             motion_path=mov_path,
+            bundle_id=timestamp,
             asset_id=asset_id,
             used_heic=False,
             apple_metadata_ready=False,
