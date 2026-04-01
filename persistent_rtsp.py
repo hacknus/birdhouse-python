@@ -274,7 +274,16 @@ class PersistentRtspRecorder:
     def _select_recent_segments(self, *, duration_seconds: float) -> list[Path]:
         self._prune_old_segments()
         required_segments = max(2, int(duration_seconds / self.segment_time_seconds) + 2)
-        segments = sorted(self.buffer_dir.glob("segment_*.ts"), key=lambda p: p.stat().st_mtime)
+        now = time.time()
+        settled_age_seconds = max(0.5, self.segment_time_seconds * 0.8)
+        segments = sorted(
+            (
+                path
+                for path in self.buffer_dir.glob("segment_*.ts")
+                if self._segment_age_seconds(path, now=now) >= settled_age_seconds
+            ),
+            key=lambda p: p.stat().st_mtime,
+        )
         return segments[-required_segments:]
 
     def _wait_for_segments(self, *, duration_seconds: float) -> list[Path]:
@@ -286,6 +295,15 @@ class PersistentRtspRecorder:
             self.ensure_running()
             time.sleep(0.25)
         return []
+
+    def _segment_age_seconds(self, path: Path, *, now: float | None = None) -> float:
+        try:
+            modified_at = path.stat().st_mtime
+        except FileNotFoundError:
+            return -1.0
+        if now is None:
+            now = time.time()
+        return now - modified_at
 
     def _render_segments_to_mov(
         self,
@@ -317,7 +335,7 @@ class PersistentRtspRecorder:
                 check=True,
                 capture_output=True,
                 text=True,
-                timeout=max(30, int(duration_seconds * 4), len(segments) * 4),
+                timeout=max(30, int(duration_seconds * 6), len(segments) * 6),
             )
 
             total_frame_count = self._count_frames(clip_path=temp_ts_path)
