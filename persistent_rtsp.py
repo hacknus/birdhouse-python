@@ -363,6 +363,10 @@ class PersistentRtspRecorder:
         timeout_seconds: int,
     ) -> None:
         end_frame = start_frame + clip_frame_count
+        if encoder == "h264_v4l2m2m":
+            encoder_args = ["-c:v", "h264_v4l2m2m"]
+        else:
+            encoder_args = ["-c:v", "libx264", "-preset", "ultrafast"]
         cmd = [
             "ffmpeg",
             "-hide_banner",
@@ -377,6 +381,7 @@ class PersistentRtspRecorder:
                 f"fps={self.video_fps:g},"
                 "scale=1920:-2"
             ),
+            *encoder_args,
             "-pix_fmt", "yuv420p",
             "-r", f"{self.video_fps:g}",
             "-b:v", "9000k",
@@ -387,11 +392,6 @@ class PersistentRtspRecorder:
             "-y",
             str(output_path),
         ]
-
-        if encoder == "h264_v4l2m2m":
-            cmd[10:10] = ["-c:v", "h264_v4l2m2m"]
-        else:
-            cmd[10:10] = ["-c:v", "libx264", "-preset", "ultrafast"]
 
         subprocess.run(
             cmd,
