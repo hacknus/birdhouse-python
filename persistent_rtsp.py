@@ -126,6 +126,12 @@ class PersistentRtspRecorder:
                     live_photo.warning = warning
                 return live_photo
 
+            logging.info(
+                "Constructing live photo clip from %d buffered segments: %s",
+                len(segments),
+                ", ".join(path.name for path in segments),
+            )
+
             mov_path = out_dir / f"{timestamp}.mov"
             jpg_path = out_dir / f"{timestamp}.jpg"
             asset_id = str(uuid.uuid4()).upper()
