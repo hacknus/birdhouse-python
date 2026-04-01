@@ -315,7 +315,10 @@ class PersistentRtspRecorder:
             )
 
             total_frame_count = self._count_frames(clip_path=temp_ts_path)
-            measured_fps = self._probe_stream_fps(clip_path=temp_ts_path)
+            measured_fps = self._estimate_effective_fps(
+                segments=segments,
+                total_frame_count=total_frame_count,
+            )
             clip_frame_count = max(1, round(duration_seconds * measured_fps))
             start_frame = max(0, total_frame_count - clip_frame_count)
 
@@ -435,57 +438,44 @@ class PersistentRtspRecorder:
                 return frame_count
         raise RuntimeError(f"Could not determine frame count for {clip_path}")
 
-    def _probe_stream_fps(self, *, clip_path: Path) -> float:
-        probe = subprocess.run(
-            [
-                "ffprobe",
-                "-hide_banner",
-                "-loglevel", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=avg_frame_rate,r_frame_rate",
-                "-of", "json",
-                str(clip_path),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-        payload = json.loads(probe.stdout or "{}")
-        for stream in payload.get("streams", []):
-            for key in ("avg_frame_rate", "r_frame_rate"):
-                fps = self._parse_ffprobe_rate(stream.get(key))
-                if fps is None:
-                    continue
-                if 1.0 <= fps <= 60.0:
-                    logging.info("Using probed video cadence %.2f fps from %s.", fps, clip_path)
-                    return fps
+    def _estimate_effective_fps(self, *, segments: list[Path], total_frame_count: int) -> float:
+        if total_frame_count <= 0:
+            return self.video_fps
+
+        try:
+            segment_times = sorted(path.stat().st_mtime for path in segments)
+        except FileNotFoundError:
+            return self.video_fps
+
+        if not segment_times:
+            return self.video_fps
+
+        span_seconds = self.segment_time_seconds
+        if len(segment_times) > 1:
+            span_seconds = max(
+                self.segment_time_seconds,
+                (segment_times[-1] - segment_times[0]) + self.segment_time_seconds,
+            )
+
+        if span_seconds <= 0:
+            return self.video_fps
+
+        measured_fps = total_frame_count / span_seconds
+        if 1.0 <= measured_fps <= 60.0:
+            logging.info(
+                "Measured buffered video cadence at %.2f fps from %d frames across %.2f seconds.",
+                measured_fps,
+                total_frame_count,
+                span_seconds,
+            )
+            return measured_fps
 
         logging.warning(
-            "Could not determine stream fps for %s; falling back to configured %.2f fps.",
-            clip_path,
+            "Discarding implausible measured fps %.2f; falling back to configured %.2f fps.",
+            measured_fps,
             self.video_fps,
         )
         return self.video_fps
-
-    @staticmethod
-    def _parse_ffprobe_rate(value: str | None) -> float | None:
-        if not value:
-            return None
-        if "/" in value:
-            numerator, denominator = value.split("/", 1)
-            try:
-                numerator_value = float(numerator)
-                denominator_value = float(denominator)
-            except ValueError:
-                return None
-            if denominator_value == 0:
-                return None
-            return numerator_value / denominator_value
-        try:
-            return float(value)
-        except ValueError:
-            return None
 
     def _extract_still_from_clip(self, *, clip_path: Path, still_path: Path, seek_seconds: float) -> None:
         subprocess.run(
