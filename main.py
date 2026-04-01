@@ -17,7 +17,7 @@ import datetime
 import threading
 
 from image_upload import upload_live_photo
-from live_photo import save_live_photo_bundle
+from persistent_rtsp import PersistentRtspRecorder
 from radar import Radar
 from time_utils import bern_image_timestamp
 from system_monitor import SystemMonitoring
@@ -53,6 +53,8 @@ class VoegeliMonitor:
         self.bucket = self.db_store.bucket
         self.upload_image_token = env_values['UPLOAD_IMAGE_TOKEN']
         self.upload_image_url = env_values['UPLOAD_IMAGE_URL']
+        self.rtsp_recorder = PersistentRtspRecorder(self.mediamtx_url)
+        self.rtsp_recorder.start()
 
         # I2C sensor setup
         i2c = board.I2C()
@@ -77,7 +79,7 @@ class VoegeliMonitor:
         self.luminosity_sensor = adafruit_tsl2561.TSL2561(i2c)
 
         # motion sensor (A121 radar 60 GHz)
-        self.radar = Radar()
+        self.radar = Radar(recorder=self.rtsp_recorder)
         self.radar.run()
 
         # self.audio_stream_thread = threading.Thread(target=run_audiostream)
@@ -109,6 +111,7 @@ class VoegeliMonitor:
             self.sht4x_outside_transceiver.close()
         except Exception:
             pass
+        self.rtsp_recorder.stop()
         self.db_store.close()
 
     def send_tcp_ack(self, message: str, response_queue: queue.Queue | None = None):
@@ -124,17 +127,19 @@ class VoegeliMonitor:
         logging.info("[TCP] Sent REP: %s", message.strip())
 
     def save_and_upload_live_image(self, timestamp: str):
-        live_photo = save_live_photo_bundle(
-            rtsp_url=self.mediamtx_url,
+        live_photo = self.rtsp_recorder.export_live_photo(
             timestamp=timestamp,
             output_dir="gallery",
         )
+        if live_photo.warning:
+            logging.warning("Live image %s warning: %s", timestamp, live_photo.warning)
         try:
             upload_live_photo(
                 live_photo_result=live_photo,
                 token=self.upload_image_token,
                 url=self.upload_image_url,
             )
+            return live_photo
         finally:
             if live_photo.still_path is not None:
                 live_photo.still_path.unlink(missing_ok=True)
@@ -427,11 +432,19 @@ if __name__ == "__main__":
 
                 def _background_save_image():
                     try:
-                        voegeli_monitor.save_and_upload_live_image(timestamp)
-                        voegeli_monitor.send_tcp_rep(f"[REP] Live image saved for {timestamp}")
+                        live_photo = voegeli_monitor.save_and_upload_live_image(timestamp)
+                        if live_photo.warning:
+                            voegeli_monitor.send_tcp_rep(
+                                f"[REP] Live image saved for {timestamp} with warning: {live_photo.warning}"
+                            )
+                        else:
+                            voegeli_monitor.send_tcp_rep(f"[REP] Live image saved for {timestamp}")
                     except subprocess.CalledProcessError as e:
                         logging.error(f"Failed to save image: {e.stderr}")
                         voegeli_monitor.send_tcp_rep("[REP] Failed to save image: MediaMTX server error")
+                    except subprocess.TimeoutExpired:
+                        logging.error("Timed out while saving live image.")
+                        voegeli_monitor.send_tcp_rep("[REP] Failed to save image: timed out")
                     except Exception:
                         logging.exception("Failed to save and upload live image.")
                         voegeli_monitor.send_tcp_rep("[REP] Failed to save image: unexpected error")

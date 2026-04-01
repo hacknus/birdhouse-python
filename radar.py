@@ -30,7 +30,7 @@ import psycopg
 from camera import get_ir_led_state, turn_ir_on, turn_ir_off
 from ignore_motion import are_we_still_blocked
 from image_upload import upload_live_photo
-from live_photo import save_live_photo_bundle
+from persistent_rtsp import PersistentRtspRecorder
 from postgresql_store import PostgresTimeSeriesStore
 from time_utils import bern_image_timestamp
 
@@ -68,6 +68,7 @@ class Radar:
             write_period_s: float = 2.0,
             motion_activity_threshold: float = 6.0,
             env_file: str = ".env",
+            recorder: PersistentRtspRecorder | None = None,
     ) -> None:
         # Track last image save time and last email sent time
         self.last_image_time = 0
@@ -78,6 +79,9 @@ class Radar:
         self.bucket = self.db_store.bucket
         self.upload_image_token = env_values['UPLOAD_IMAGE_TOKEN']
         self.upload_image_url = env_values['UPLOAD_IMAGE_URL']
+        self.rtsp_recorder = recorder or PersistentRtspRecorder(self.mediamtx_url)
+        self._owns_rtsp_recorder = recorder is None
+        self.rtsp_recorder.start()
 
         # replace this with custom email-interface
         self.email_reporter = Reporter("Voegeli")
@@ -221,6 +225,8 @@ class Radar:
         if self._presence_thread is not None:
             self._presence_thread.join(timeout=2.0)
         self._disconnect_radar()
+        if self._owns_rtsp_recorder:
+            self.rtsp_recorder.stop()
         self.db_store.close()
 
     def _sampler(self) -> None:
@@ -361,7 +367,7 @@ class Radar:
                             continue
 
                         encoded_email = encode_email(email)
-                        base_url = "https://linusleo.synology.me"
+                        base_url = "https://voegeli.linusleo.synology.me"
                         unsubscribe_link = f"{base_url}/unsubscribe/{encoded_email}/"
                         email_body = (
                             "Hoi Du!<br>"
@@ -420,11 +426,12 @@ class Radar:
             timestamp = bern_image_timestamp()
 
             try:
-                live_photo = save_live_photo_bundle(
-                    rtsp_url=self.mediamtx_url,
+                live_photo = self.rtsp_recorder.export_live_photo(
                     timestamp=timestamp,
                     output_dir="gallery",
                 )
+                if live_photo.warning:
+                    logging.warning("Radar live image %s warning: %s", timestamp, live_photo.warning)
                 self.last_image_time = current_time
                 upload_live_photo(
                     live_photo_result=live_photo,
@@ -438,6 +445,8 @@ class Radar:
             except subprocess.CalledProcessError as e:
                 logging.error(f"Failed to capture image: {e.stderr}")
                 print(f"Failed to capture image from MediaMTX server: {e}")
+            except subprocess.TimeoutExpired:
+                logging.error("Timed out while capturing live image.")
 
             if ir_enabled_for_capture:
                 turn_ir_off()
