@@ -23,6 +23,7 @@ class PersistentRtspRecorder:
         segment_time_seconds: float = 1.0,
         default_duration_seconds: float = 5.0,
         post_trigger_seconds: float = 2.5,
+        decode_safety_margin_seconds: float = 1.0,
     ) -> None:
         self.rtsp_url = rtsp_url
         self.buffer_dir = Path(buffer_dir)
@@ -30,6 +31,7 @@ class PersistentRtspRecorder:
         self.segment_time_seconds = segment_time_seconds
         self.default_duration_seconds = default_duration_seconds
         self.post_trigger_seconds = post_trigger_seconds
+        self.decode_safety_margin_seconds = decode_safety_margin_seconds
         self.initial_wait_timeout_seconds = max(
             3.0,
             self.segment_time_seconds * 3,
@@ -88,9 +90,11 @@ class PersistentRtspRecorder:
             if post_trigger_seconds > 0:
                 time.sleep(post_trigger_seconds)
 
-            segments = self._select_recent_segments(duration_seconds=duration_seconds)
+            buffered_duration_seconds = duration_seconds + self.decode_safety_margin_seconds
+
+            segments = self._select_recent_segments(duration_seconds=buffered_duration_seconds)
             if not segments:
-                segments = self._wait_for_segments(duration_seconds=duration_seconds)
+                segments = self._wait_for_segments(duration_seconds=buffered_duration_seconds)
             if not segments:
                 logging.warning("RTSP buffer not ready; falling back to direct live capture.")
                 live_photo = save_live_photo_bundle(
@@ -120,6 +124,7 @@ class PersistentRtspRecorder:
                     output_path=mov_path,
                     asset_id=asset_id,
                     duration_seconds=duration_seconds,
+                    decode_safety_margin_seconds=self.decode_safety_margin_seconds,
                 )
             except subprocess.TimeoutExpired:
                 logging.error(
@@ -133,7 +138,11 @@ class PersistentRtspRecorder:
                 self._extract_still_from_clip(
                     clip_path=temp_ts_path,
                     still_path=jpg_path,
-                    seek_seconds=max(0.0, len(segments) * self.segment_time_seconds - (duration_seconds / 2.0)),
+                    seek_seconds=max(
+                        0.0,
+                        len(segments) * self.segment_time_seconds
+                        - (duration_seconds / 2.0),
+                    ),
                 )
             except subprocess.TimeoutExpired:
                 logging.error("Timed out while extracting still image from %s.", temp_ts_path)
@@ -260,6 +269,7 @@ class PersistentRtspRecorder:
         output_path: Path,
         asset_id: str,
         duration_seconds: float,
+        decode_safety_margin_seconds: float,
     ) -> None:
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as tmp:
             concat_path = Path(tmp.name)
@@ -285,7 +295,14 @@ class PersistentRtspRecorder:
             )
 
             total_span_seconds = len(segments) * self.segment_time_seconds
-            clip_start_seconds = max(0.0, total_span_seconds - duration_seconds)
+            clip_start_seconds = max(
+                0.0,
+                total_span_seconds - duration_seconds,
+            )
+            clip_start_seconds = max(
+                decode_safety_margin_seconds,
+                clip_start_seconds,
+            )
 
             subprocess.run(
                 [
@@ -299,7 +316,7 @@ class PersistentRtspRecorder:
                     "-an",
                     "-c:v", "libx264",
                     "-preset", "ultrafast",
-                    "-vf", "scale=960:-2,fps=15",
+                    "-vf", "scale=1920:-2,fps=15",
                     "-pix_fmt", "yuv420p",
                     "-b:v", "900k",
                     "-maxrate", "1100k",
