@@ -314,19 +314,9 @@ class PersistentRtspRecorder:
                 timeout=max(30, int(duration_seconds * 4), len(segments) * 4),
             )
 
-            total_span_seconds = len(segments) * self.segment_time_seconds
-            clip_start_seconds = max(
-                0.0,
-                total_span_seconds - duration_seconds,
-            )
-            clip_start_seconds = max(
-                decode_safety_margin_seconds,
-                clip_start_seconds,
-            )
-            clip_start_seconds = self._find_first_keyframe_at_or_after(
-                clip_path=temp_ts_path,
-                start_seconds=clip_start_seconds,
-            )
+            clip_frame_count = max(1, round(duration_seconds * self.video_fps))
+            total_frame_count = self._count_frames(clip_path=temp_ts_path)
+            start_frame = max(0, total_frame_count - clip_frame_count)
 
             encoder = self.final_video_encoder
             try:
@@ -334,8 +324,8 @@ class PersistentRtspRecorder:
                     input_path=temp_ts_path,
                     output_path=output_path,
                     asset_id=asset_id,
-                    clip_start_seconds=clip_start_seconds,
-                    duration_seconds=duration_seconds,
+                    start_frame=start_frame,
+                    clip_frame_count=clip_frame_count,
                     encoder=encoder,
                     timeout_seconds=max(60, int(duration_seconds * 8))
                     if encoder == "h264_v4l2m2m"
@@ -351,8 +341,8 @@ class PersistentRtspRecorder:
                         input_path=temp_ts_path,
                         output_path=output_path,
                         asset_id=asset_id,
-                        clip_start_seconds=clip_start_seconds,
-                        duration_seconds=duration_seconds,
+                        start_frame=start_frame,
+                        clip_frame_count=clip_frame_count,
                         encoder="libx264",
                         timeout_seconds=max(90, int(duration_seconds * 12)),
                     )
@@ -367,21 +357,26 @@ class PersistentRtspRecorder:
         input_path: Path,
         output_path: Path,
         asset_id: str,
-        clip_start_seconds: float,
-        duration_seconds: float,
+        start_frame: int,
+        clip_frame_count: int,
         encoder: str,
         timeout_seconds: int,
     ) -> None:
+        end_frame = start_frame + clip_frame_count
         cmd = [
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "warning",
             "-fflags", "+genpts",
-            "-ss", str(clip_start_seconds),
             "-i", str(input_path),
-            "-t", str(duration_seconds),
             "-an",
-            "-vf", f"setpts=N/({self.video_fps}*TB),fps={self.video_fps:g},scale=1920:-2",
+            "-vf",
+            (
+                f"trim=start_frame={start_frame}:end_frame={end_frame},"
+                f"setpts=N/({self.video_fps}*TB),"
+                f"fps={self.video_fps:g},"
+                "scale=1920:-2"
+            ),
             "-pix_fmt", "yuv420p",
             "-r", f"{self.video_fps:g}",
             "-b:v", "9000k",
@@ -406,16 +401,15 @@ class PersistentRtspRecorder:
             timeout=timeout_seconds,
         )
 
-    def _find_first_keyframe_at_or_after(self, *, clip_path: Path, start_seconds: float) -> float:
+    def _count_frames(self, *, clip_path: Path) -> int:
         probe = subprocess.run(
             [
                 "ffprobe",
                 "-hide_banner",
                 "-loglevel", "error",
                 "-select_streams", "v:0",
-                "-skip_frame", "nokey",
-                "-show_frames",
-                "-show_entries", "frame=pts_time",
+                "-count_frames",
+                "-show_entries", "stream=nb_read_frames",
                 "-of", "json",
                 str(clip_path),
             ],
@@ -425,17 +419,17 @@ class PersistentRtspRecorder:
             timeout=20,
         )
         payload = json.loads(probe.stdout or "{}")
-        for frame in payload.get("frames", []):
-            pts_time = frame.get("pts_time")
-            if pts_time is None:
+        for stream in payload.get("streams", []):
+            nb_read_frames = stream.get("nb_read_frames")
+            if nb_read_frames is None:
                 continue
             try:
-                pts = float(pts_time)
+                frame_count = int(nb_read_frames)
             except (TypeError, ValueError):
                 continue
-            if pts >= start_seconds:
-                return pts
-        return start_seconds
+            if frame_count > 0:
+                return frame_count
+        raise RuntimeError(f"Could not determine frame count for {clip_path}")
 
     def _extract_still_from_clip(self, *, clip_path: Path, still_path: Path, seek_seconds: float) -> None:
         subprocess.run(
