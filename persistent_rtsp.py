@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import logging
 import os
@@ -149,6 +150,20 @@ class PersistentRtspRecorder:
                 raise
             finally:
                 temp_ts_path.unlink(missing_ok=True)
+
+            if not jpg_path.exists():
+                logging.warning(
+                    "Still image %s missing after buffered extraction; retrying from rendered MOV.",
+                    jpg_path,
+                )
+                self._extract_still_from_clip(
+                    clip_path=mov_path,
+                    still_path=jpg_path,
+                    seek_seconds=max(0.0, duration_seconds / 2.0),
+                )
+
+            if not jpg_path.exists():
+                raise FileNotFoundError(f"{jpg_path} not found after still extraction")
 
             try:
                 still_metadata_written = _write_still_metadata(jpg_path, asset_id)
@@ -303,36 +318,112 @@ class PersistentRtspRecorder:
                 decode_safety_margin_seconds,
                 clip_start_seconds,
             )
-
-            subprocess.run(
-                [
-                    "ffmpeg",
-                    "-hide_banner",
-                    "-loglevel", "warning",
-                    "-fflags", "+genpts",
-                    "-ss", str(clip_start_seconds),
-                    "-i", str(temp_ts_path),
-                    "-t", str(duration_seconds),
-                    "-an",
-                    "-c:v", "libx264",
-                    "-preset", "ultrafast",
-                    "-vf", "scale=1920:-2,fps=15",
-                    "-pix_fmt", "yuv420p",
-                    "-b:v", "900k",
-                    "-maxrate", "1100k",
-                    "-bufsize", "1800k",
-                    "-movflags", "+faststart+use_metadata_tags",
-                    "-metadata", f"com.apple.quicktime.content.identifier={asset_id}",
-                    "-y",
-                    str(output_path),
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=max(90, int(duration_seconds * 12)),
+            clip_start_seconds = self._find_first_keyframe_at_or_after(
+                clip_path=temp_ts_path,
+                start_seconds=clip_start_seconds,
             )
+
+            try:
+                self._encode_final_clip(
+                    input_path=temp_ts_path,
+                    output_path=output_path,
+                    asset_id=asset_id,
+                    clip_start_seconds=clip_start_seconds,
+                    duration_seconds=duration_seconds,
+                    encoder="h264_v4l2m2m",
+                    timeout_seconds=max(60, int(duration_seconds * 8)),
+                )
+            except subprocess.CalledProcessError as exc:
+                logging.warning(
+                    "Hardware H.264 encode failed, falling back to libx264: %s",
+                    exc.stderr.strip(),
+                )
+                self._encode_final_clip(
+                    input_path=temp_ts_path,
+                    output_path=output_path,
+                    asset_id=asset_id,
+                    clip_start_seconds=clip_start_seconds,
+                    duration_seconds=duration_seconds,
+                    encoder="libx264",
+                    timeout_seconds=max(90, int(duration_seconds * 12)),
+                )
         finally:
             concat_path.unlink(missing_ok=True)
+
+    def _encode_final_clip(
+        self,
+        *,
+        input_path: Path,
+        output_path: Path,
+        asset_id: str,
+        clip_start_seconds: float,
+        duration_seconds: float,
+        encoder: str,
+        timeout_seconds: int,
+    ) -> None:
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel", "warning",
+            "-fflags", "+genpts",
+            "-ss", str(clip_start_seconds),
+            "-i", str(input_path),
+            "-t", str(duration_seconds),
+            "-an",
+            "-vf", "scale=1920:-2,fps=15",
+            "-pix_fmt", "yuv420p",
+            "-b:v", "900k",
+            "-maxrate", "1100k",
+            "-bufsize", "1800k",
+            "-movflags", "+faststart+use_metadata_tags",
+            "-metadata", f"com.apple.quicktime.content.identifier={asset_id}",
+            "-y",
+            str(output_path),
+        ]
+
+        if encoder == "h264_v4l2m2m":
+            cmd[10:10] = ["-c:v", "h264_v4l2m2m"]
+        else:
+            cmd[10:10] = ["-c:v", "libx264", "-preset", "ultrafast"]
+
+        subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+
+    def _find_first_keyframe_at_or_after(self, *, clip_path: Path, start_seconds: float) -> float:
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-hide_banner",
+                "-loglevel", "error",
+                "-select_streams", "v:0",
+                "-skip_frame", "nokey",
+                "-show_frames",
+                "-show_entries", "frame=pts_time",
+                "-of", "json",
+                str(clip_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        payload = json.loads(probe.stdout or "{}")
+        for frame in payload.get("frames", []):
+            pts_time = frame.get("pts_time")
+            if pts_time is None:
+                continue
+            try:
+                pts = float(pts_time)
+            except (TypeError, ValueError):
+                continue
+            if pts >= start_seconds:
+                return pts
+        return start_seconds
 
     def _extract_still_from_clip(self, *, clip_path: Path, still_path: Path, seek_seconds: float) -> None:
         subprocess.run(
