@@ -314,8 +314,12 @@ class PersistentRtspRecorder:
                 timeout=max(30, int(duration_seconds * 4), len(segments) * 4),
             )
 
-            clip_frame_count = max(1, round(duration_seconds * self.video_fps))
             total_frame_count = self._count_frames(clip_path=temp_ts_path)
+            measured_fps = self._estimate_effective_fps(
+                segments=segments,
+                total_frame_count=total_frame_count,
+            )
+            clip_frame_count = max(1, round(duration_seconds * measured_fps))
             start_frame = max(0, total_frame_count - clip_frame_count)
 
             encoder = self.final_video_encoder
@@ -326,6 +330,7 @@ class PersistentRtspRecorder:
                     asset_id=asset_id,
                     start_frame=start_frame,
                     clip_frame_count=clip_frame_count,
+                    output_fps=measured_fps,
                     encoder=encoder,
                     timeout_seconds=max(60, int(duration_seconds * 8))
                     if encoder == "h264_v4l2m2m"
@@ -343,6 +348,7 @@ class PersistentRtspRecorder:
                         asset_id=asset_id,
                         start_frame=start_frame,
                         clip_frame_count=clip_frame_count,
+                        output_fps=measured_fps,
                         encoder="libx264",
                         timeout_seconds=max(90, int(duration_seconds * 12)),
                     )
@@ -359,6 +365,7 @@ class PersistentRtspRecorder:
         asset_id: str,
         start_frame: int,
         clip_frame_count: int,
+        output_fps: float,
         encoder: str,
         timeout_seconds: int,
     ) -> None:
@@ -377,13 +384,13 @@ class PersistentRtspRecorder:
             "-vf",
             (
                 f"trim=start_frame={start_frame}:end_frame={end_frame},"
-                f"setpts=N/({self.video_fps}*TB),"
-                f"fps={self.video_fps:g},"
+                f"setpts=N/({output_fps}*TB),"
+                f"fps={output_fps:g},"
                 "scale=1920:-2"
             ),
             *encoder_args,
             "-pix_fmt", "yuv420p",
-            "-r", f"{self.video_fps:g}",
+            "-r", f"{output_fps:g}",
             "-b:v", "9000k",
             "-maxrate", "9000k",
             "-bufsize", "18000k",
@@ -430,6 +437,45 @@ class PersistentRtspRecorder:
             if frame_count > 0:
                 return frame_count
         raise RuntimeError(f"Could not determine frame count for {clip_path}")
+
+    def _estimate_effective_fps(self, *, segments: list[Path], total_frame_count: int) -> float:
+        if total_frame_count <= 0:
+            return self.video_fps
+
+        try:
+            segment_times = sorted(path.stat().st_mtime for path in segments)
+        except FileNotFoundError:
+            return self.video_fps
+
+        if not segment_times:
+            return self.video_fps
+
+        span_seconds = self.segment_time_seconds
+        if len(segment_times) > 1:
+            span_seconds = max(
+                self.segment_time_seconds,
+                (segment_times[-1] - segment_times[0]) + self.segment_time_seconds,
+            )
+
+        if span_seconds <= 0:
+            return self.video_fps
+
+        measured_fps = total_frame_count / span_seconds
+        if 1.0 <= measured_fps <= 60.0:
+            logging.info(
+                "Measured buffered video cadence at %.2f fps from %d frames across %.2f seconds.",
+                measured_fps,
+                total_frame_count,
+                span_seconds,
+            )
+            return measured_fps
+
+        logging.warning(
+            "Discarding implausible measured fps %.2f; falling back to configured %.2f fps.",
+            measured_fps,
+            self.video_fps,
+        )
+        return self.video_fps
 
     def _extract_still_from_clip(self, *, clip_path: Path, still_path: Path, seek_seconds: float) -> None:
         subprocess.run(
