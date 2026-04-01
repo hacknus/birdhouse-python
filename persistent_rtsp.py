@@ -129,7 +129,7 @@ class PersistentRtspRecorder:
             asset_id = str(uuid.uuid4()).upper()
             warning_parts: list[str] = []
 
-            temp_ts_path = mov_path.with_suffix(".buffer.ts")
+            temp_ts_path = mov_path.with_suffix(".buffer.mkv")
 
             try:
                 self._render_segments_to_mov(
@@ -220,7 +220,7 @@ class PersistentRtspRecorder:
     def _start_process_locked(self) -> None:
         self._stop_process_locked()
         self.buffer_dir.mkdir(parents=True, exist_ok=True)
-        segment_pattern = str(self.buffer_dir / "segment_%03d.ts")
+        segment_pattern = str(self.buffer_dir / "segment_%03d.mkv")
         segment_wrap = max(
             8,
             int(self.rolling_window_seconds / max(self.segment_time_seconds, 0.1)) + 4,
@@ -239,8 +239,7 @@ class PersistentRtspRecorder:
             "-segment_time", str(self.segment_time_seconds),
             "-segment_wrap", str(segment_wrap),
             "-segment_list_size", str(segment_wrap),
-            "-segment_format", "mpegts",
-            "-segment_format_options", "mpegts_flags=resend_headers",
+            "-segment_format", "matroska",
             segment_pattern,
         ]
         self._process = subprocess.Popen(
@@ -271,7 +270,7 @@ class PersistentRtspRecorder:
 
     def _prune_old_segments(self) -> None:
         keep_after = time.time() - max(self.rolling_window_seconds, self.default_duration_seconds) - 5
-        for path in self.buffer_dir.glob("segment_*.ts"):
+        for path in self._iter_segment_files():
             try:
                 if path.stat().st_mtime < keep_after:
                     path.unlink(missing_ok=True)
@@ -281,7 +280,7 @@ class PersistentRtspRecorder:
     def _select_recent_segments(self, *, duration_seconds: float) -> list[Path]:
         self._prune_old_segments()
         required_segments = max(2, int(duration_seconds / self.segment_time_seconds) + 2)
-        segments = sorted(self.buffer_dir.glob("segment_*.ts"), key=lambda p: p.stat().st_mtime)
+        segments = sorted(self._iter_segment_files(), key=lambda p: p.stat().st_mtime)
         return segments[-required_segments:]
 
     def _wait_for_segments(self, *, duration_seconds: float) -> list[Path]:
@@ -448,6 +447,12 @@ class PersistentRtspRecorder:
             if pts >= start_seconds:
                 return pts
         return start_seconds
+
+    def _iter_segment_files(self) -> list[Path]:
+        segment_files: list[Path] = []
+        for pattern in ("segment_*.mkv", "segment_*.ts"):
+            segment_files.extend(self.buffer_dir.glob(pattern))
+        return [path for path in segment_files if path.is_file()]
 
     def _extract_still_from_clip(self, *, clip_path: Path, still_path: Path, seek_seconds: float) -> None:
         subprocess.run(

@@ -98,11 +98,11 @@ rpicam-vid -t 0 \
   --nopreview \
   -o - | tee \
   >(ffmpeg -re -fflags +genpts -r 25 -f h264 -i - -c:v copy -rtsp_transport tcp -f rtsp rtsp://raspberrypi.netbird.cloud:8554/birdcam) \
-  >(ffmpeg -fflags +genpts -r 25 -f h264 -i - -c:v copy -f segment -segment_time 1 -segment_wrap 16 -segment_list_size 16 -segment_format mpegts /home/birdie/birdhouse-buffer/segment_%03d.ts) \
+  >(ffmpeg -fflags +genpts -r 25 -f h264 -i - -c:v copy -f segment -segment_time 1 -segment_wrap 16 -segment_list_size 16 -segment_format matroska /home/birdie/birdhouse-buffer/segment_%03d.mkv) \
   >/dev/null
 ```
 
-The `-r 25` on both FFmpeg branches is important here. Without it, FFmpeg can infer bad timestamps from the raw H.264 pipe, which can make buffered clips play back too fast. Also avoid `-reset_timestamps 1` on the local segment branch, because the Python side later concatenates those segments again and needs a continuous timeline across them.
+The `-r 25` on both FFmpeg branches is important here. Without it, FFmpeg can infer bad timestamps from the raw H.264 pipe, which can make buffered clips play back too fast. The local branch uses Matroska segments instead of MPEG-TS because Matroska preserves timestamps much more reliably for later concatenation and trimming.
 
 Relevant `.env` entries:
 
