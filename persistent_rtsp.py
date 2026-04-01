@@ -395,7 +395,7 @@ class PersistentRtspRecorder:
             "-i", str(input_path),
             "-t", str(duration_seconds),
             "-an",
-            "-vf", "scale=1920:-2,fps=15",
+            "-vf", "scale=1920:-2,fps=15,setpts=N/(15*TB)",
             "-pix_fmt", "yuv420p",
             "-b:v", "900k",
             "-maxrate", "1100k",
