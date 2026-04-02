@@ -413,12 +413,10 @@ class PersistentRtspRecorder:
             (
                 f"trim=start={start_seconds:.6f}:duration={clip_duration_seconds:.6f},"
                 "setpts=PTS-STARTPTS,"
-                f"fps={output_fps:g},"
                 "scale=1920:-2"
             ),
             *encoder_args,
             "-pix_fmt", "yuv420p",
-            "-r", f"{output_fps:g}",
             "-b:v", "9000k",
             "-maxrate", "9000k",
             "-bufsize", "18000k",
