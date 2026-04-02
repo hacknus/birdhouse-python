@@ -97,11 +97,11 @@ rpicam-vid -t 0 \
   --nopreview \
   -o - | tee \
   >(ffmpeg -re -fflags +genpts -r 25 -f h264 -i - -c:v copy -rtsp_transport tcp -f rtsp rtsp://raspberrypi.netbird.cloud:8554/birdcam) \
-  >(ffmpeg -fflags +genpts -r 25 -f h264 -i - -c:v copy -bsf:v setts=pts=N*3600:dts=N*3600:duration=3600:time_base=1/90000 -f segment -segment_time 1 -segment_wrap 16 -segment_list_size 16 -segment_format mpegts /home/birdie/birdhouse-buffer/segment_%03d.ts) \
+  >(ffmpeg -fflags +genpts -r 25 -f h264 -i - -c:v copy -f segment -segment_time 1 -segment_wrap 16 -segment_list_size 16 -segment_format mpegts /home/birdie/birdhouse-buffer/segment_%03d.ts) \
   >/dev/null
 ```
 
-The `-r 25` on both FFmpeg branches is important here. Without it, FFmpeg can infer bad timestamps from the raw H.264 pipe, which can make buffered clips play back too fast. The local segment branch also needs explicit packet timestamps, so it uses `-bsf:v setts=...` to stamp a 25 fps timeline into the copied H.264 stream before segmenting. Keeping `-re` on the RTSP branch is fine if you want that leg paced in real time. Also avoid `-reset_timestamps 1` on the local segment branch, because the Python side later concatenates those segments again and needs a continuous timeline across them.
+The `-r 25` on both FFmpeg branches is important here. Without it, FFmpeg can infer bad timestamps from the raw H.264 pipe. Do not synthesize packet timestamps on the local segment branch with `setts=...`; that can compress real elapsed time into an artificial 25 fps timeline and make exported clips look sped up. Keeping `-re` on the RTSP branch is fine if you want that leg paced in real time. Also avoid `-reset_timestamps 1` on the local segment branch, because the Python side later concatenates those segments again and needs a continuous timeline across them.
 
 Relevant `.env` entries:
 
