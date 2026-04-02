@@ -25,7 +25,7 @@ class PersistentRtspRecorder:
         rolling_window_seconds: int = 12,
         segment_time_seconds: float = 1.0,
         default_duration_seconds: float = 5.0,
-        post_trigger_seconds: float = 2.5,
+        post_trigger_seconds: float = 5.0,
         decode_safety_margin_seconds: float = 1.0,
         final_video_encoder: str = "libx264",
         video_fps: float = 25.0,
