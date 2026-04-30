@@ -133,6 +133,7 @@ class VoegeliMonitor:
     def save_and_upload_live_image(self, timestamp: str):
         live_photo = self.rtsp_recorder.export_live_photo(
             timestamp=timestamp,
+            post_trigger_seconds=5.0,
             output_dir="gallery",
         )
         if live_photo.warning:
