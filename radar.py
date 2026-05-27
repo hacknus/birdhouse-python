@@ -417,9 +417,9 @@ class Radar:
             except Exception:
                 logging.exception("Failed to read latest luminosity for IR gating.")
 
-            if isinstance(latest_lux, (int, float)) and latest_lux > 2000:
+            if isinstance(latest_lux, (int, float)) and latest_lux > 2:
                 logging.info(
-                    "Skipping IR for automated picture: luminosity %.2f lux > 2000 lux.",
+                    "Skipping IR for automated picture: luminosity %.2f lux > 2 lux.",
                     float(latest_lux),
                 )
             else:
